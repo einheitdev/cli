@@ -143,6 +143,112 @@ auto HandleKeyGenerate(const std::string &name) -> int {
   return 0;
 }
 
+auto PromptLine(const std::string &label,
+                const std::string &default_value = "")
+    -> std::string {
+  std::cout << std::format(
+      "  {}{}: ", label,
+      default_value.empty() ? ""
+                             : std::format(" [{}]", default_value));
+  std::cout.flush();
+  std::string line;
+  if (!std::getline(std::cin, line)) return default_value;
+  return line.empty() ? default_value : line;
+}
+
+auto HandleInit() -> int {
+  using namespace einheit::cli;
+  const char *home = std::getenv("HOME");
+  if (!home) {
+    std::cerr << "HOME unset\n";
+    return 1;
+  }
+
+  std::cout
+      << "\n  einheit first-run setup\n"
+      << "  ---------------------------\n"
+      << "  (press Enter to accept the default in [brackets])\n\n";
+
+  const auto themes = render::NamedThemeList();
+  std::cout << "  available themes: ";
+  for (std::size_t i = 0; i < themes.size(); ++i) {
+    if (i > 0) std::cout << ", ";
+    std::cout << themes[i];
+  }
+  std::cout << "\n";
+  const auto theme = PromptLine("theme", "psychotropic");
+
+  const auto keyname = PromptLine("Curve key name", "default");
+  auto pair = curve::Generate();
+  if (!pair) {
+    std::cerr << std::format("key generation failed: {}\n",
+                             pair.error().message);
+    return 1;
+  }
+  const auto keys_base = std::format("{}/.einheit/keys", home);
+  if (auto r = curve::WriteToDisk(keys_base, keyname, *pair); !r) {
+    std::cerr << std::format("key write failed: {}\n",
+                             r.error().message);
+    return 1;
+  }
+  std::cout << std::format("  generated {}/{}.secret (0600)\n",
+                           keys_base, keyname);
+  std::cout << std::format("  public key: {}\n", pair->public_key);
+
+  const auto target_name =
+      PromptLine("first target name (blank to skip)");
+  if (!target_name.empty()) {
+    const auto endpoint = PromptLine(
+        std::format("  {} endpoint", target_name),
+        "tcp://appliance:7541");
+    const auto server_key =
+        PromptLine("  server Curve public key (Z85)");
+    target::TargetConfig cfg;
+    if (auto loaded = target::LoadFromHome(); loaded) cfg = *loaded;
+    target::Target t;
+    t.name = target_name;
+    t.control_endpoint = endpoint;
+    t.server_public_key = server_key;
+    t.client_secret_key_path =
+        std::format("{}/{}.secret", keys_base, keyname);
+    cfg.targets.push_back(std::move(t));
+    if (!cfg.default_target) cfg.default_target = target_name;
+    // Write config ourselves — there's no SaveFromFile helper yet.
+    std::filesystem::create_directories(
+        std::format("{}/.einheit", home));
+    std::ofstream f(
+        std::format("{}/.einheit/config", home), std::ios::trunc);
+    f << "targets:\n";
+    for (const auto &tt : cfg.targets) {
+      f << std::format(
+          "  - name: {}\n"
+          "    endpoint: {}\n"
+          "    server_key: \"{}\"\n"
+          "    client_key: {}\n",
+          tt.name, tt.control_endpoint, tt.server_public_key,
+          tt.client_secret_key_path);
+    }
+    if (cfg.default_target) {
+      f << std::format("default: {}\n", *cfg.default_target);
+    }
+    std::cout << std::format("  wrote {}/.einheit/config\n", home);
+  }
+
+  // Persist theme selection.
+  workstation::State st;
+  if (auto prior = workstation::Load(workstation::DefaultPath());
+      prior) {
+    st = *prior;
+  }
+  st.active_theme = theme;
+  (void)workstation::Save(workstation::DefaultPath(), st);
+
+  std::cout
+      << "\n  done — try `einheit --learn` to explore,"
+      << "\n  or `einheit show status` to reach your target.\n\n";
+  return 0;
+}
+
 auto HandleUse(const std::string &target_name) -> int {
   using namespace einheit::cli;
   // Verify the target exists in config before switching.
@@ -229,6 +335,9 @@ auto main(int argc, char **argv) -> int {
   use_cmd->add_option("target", use_name, "Target name from config")
       ->required();
 
+  auto *init_cmd = app.add_subcommand(
+      "init", "First-run setup — generates keys, writes config");
+
   try {
     app.parse(argc, argv);
   } catch (const CLI::ParseError &e) {
@@ -237,6 +346,7 @@ auto main(int argc, char **argv) -> int {
 
   if (*key_gen) return HandleKeyGenerate(key_name);
   if (*use_cmd) return HandleUse(use_name);
+  if (*init_cmd) return HandleInit();
 
   using namespace einheit::cli;
 
@@ -318,6 +428,15 @@ auto main(int argc, char **argv) -> int {
       force_light ||
       (!force_dark && render::DetectLightTerminal());
   auto base_theme = render::PickTheme(caps, prefer_light);
+
+  // Honour a persisted `theme use <name>` selection.
+  if (auto saved = workstation::Load(workstation::DefaultPath());
+      saved && saved->active_theme) {
+    if (auto named = render::NamedTheme(*saved->active_theme);
+        named) {
+      base_theme = *named;
+    }
+  }
   std::string chosen_theme_path = theme_path;
   if (chosen_theme_path.empty()) {
     if (const char *home = std::getenv("HOME"); home) {

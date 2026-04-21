@@ -39,6 +39,9 @@ auto Load(const std::string &path)
     if (doc["active_target"]) {
       s.active_target = doc["active_target"].as<std::string>();
     }
+    if (doc["active_theme"]) {
+      s.active_theme = doc["active_theme"].as<std::string>();
+    }
     return s;
   } catch (const YAML::Exception &e) {
     return std::unexpected(
@@ -60,6 +63,9 @@ auto Save(const std::string &path, const State &s)
     YAML::Node doc;
     if (s.active_target) {
       doc["active_target"] = *s.active_target;
+    }
+    if (s.active_theme) {
+      doc["active_theme"] = *s.active_theme;
     }
     std::ofstream f(path, std::ios::trunc);
     if (!f) {

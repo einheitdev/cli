@@ -57,6 +57,10 @@ auto RegisterGlobals(CommandTree &tree)
       Make("explain", "",
            "Show the wire representation + role + session "
            "requirement for a command"),
+      Make("theme list", "", "List shipped named themes"),
+      Make("theme use", "",
+           "Switch to a named theme for the remainder of this "
+           "session"),
       Make("configure", "configure",
            "Enter configure mode and open a candidate session",
            RoleGate::AdminOnly),

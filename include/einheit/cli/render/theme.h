@@ -16,7 +16,9 @@
 #define INCLUDE_EINHEIT_CLI_RENDER_THEME_H_
 
 #include <expected>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include <ftxui/screen/color.hpp>
 
@@ -42,12 +44,42 @@ struct Theme {
 };
 
 /// Rich 24-bit dark palette — primary theme on dark terminals.
+/// Named "psychotropic" — loosely after karl's nvim colourscheme.
 /// @returns Truecolor dark theme.
 auto DefaultDarkTrueColor() -> Theme;
 
 /// ANSI-16 dark palette — used when caps don't report truecolor.
 /// @returns ANSI dark theme.
 auto DefaultDarkAnsi() -> Theme;
+
+/// Named dark themes — shipped alternatives to psychotropic.
+/// Each returns a Truecolor palette; callers can check caps and
+/// fall back to DefaultDarkAnsi when the terminal doesn't support
+/// RGB.
+/// @returns The "ocean" theme (cool blue-teal).
+auto OceanTheme() -> Theme;
+
+/// @returns The "forest" theme (earthy greens + moss).
+auto ForestTheme() -> Theme;
+
+/// @returns The "solarized-dark" theme (Ethan Schoonover's palette).
+auto SolarizedDarkTheme() -> Theme;
+
+/// @returns The "high-contrast" theme (max legibility, minimal
+/// hue — good for projectors or accessibility).
+auto HighContrastTheme() -> Theme;
+
+/// Look up a named theme. Known names (case-insensitive): psycho,
+/// psychotropic, ocean, forest, solarized, solarized-dark, contrast,
+/// high-contrast.
+/// @param name Theme name.
+/// @returns Populated Theme, or std::nullopt if the name is
+/// unknown.
+auto NamedTheme(const std::string &name) -> std::optional<Theme>;
+
+/// @returns Every name understood by NamedTheme(), sorted
+/// alphabetically. Useful for `help` / `theme list` output.
+auto NamedThemeList() -> std::vector<std::string>;
 
 /// Rich 24-bit light palette — mirror of the dark palette with
 /// darker foregrounds chosen to read on a white / cream background.

@@ -38,6 +38,7 @@
 #include "einheit/cli/render/pager.h"
 #include "einheit/cli/render/table.h"
 #include "einheit/cli/schema.h"
+#include "einheit/cli/workstation_state.h"
 
 namespace einheit::cli::shell {
 namespace {
@@ -698,6 +699,57 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
         row("aliases loaded", !aliases.table.empty(),
             std::format("{} entries", aliases.table.size()));
         render::RenderFormatted(t, renderer);
+      } else if (parsed->spec->path == "theme list") {
+        render::Table t;
+        render::AddColumn(t, "theme", render::Align::Left,
+                          render::Priority::High);
+        render::AddColumn(t, "description", render::Align::Left,
+                          render::Priority::Medium);
+        const auto descs =
+            std::unordered_map<std::string, std::string>{
+                {"forest", "earthy greens + moss"},
+                {"high-contrast", "near-mono, max legibility"},
+                {"ocean", "cool blues + teal"},
+                {"psychotropic", "default, bold and playful"},
+                {"solarized-dark", "Ethan Schoonover's palette"},
+            };
+        for (const auto &name : render::NamedThemeList()) {
+          render::AddRow(t, {
+              render::Cell{name, render::Semantic::Emphasis},
+              render::Cell{descs.count(name) ? descs.at(name) : "",
+                           render::Semantic::Dim},
+          });
+        }
+        render::RenderFormatted(t, renderer);
+      } else if (parsed->spec->path == "theme use") {
+        if (parsed->args.empty()) {
+          render::RenderError("theme",
+                              "usage: theme use <name>",
+                              "try: theme list", renderer);
+        } else {
+          const auto &name = parsed->args[0];
+          auto picked = render::NamedTheme(name);
+          if (!picked) {
+            render::RenderError(
+                "theme", std::format("unknown theme '{}'", name),
+                "try: theme list", renderer);
+          } else {
+            // Swap the live theme and persist the choice so the
+            // next invocation picks it up too.
+            s.theme = *picked;
+            renderer = render::Renderer(
+                std::cout, s.caps, renderer.Format(), *picked);
+            workstation::State st;
+            if (auto prior = workstation::Load(
+                    workstation::DefaultPath());
+                prior) {
+              st = *prior;
+            }
+            st.active_theme = name;
+            (void)workstation::Save(workstation::DefaultPath(), st);
+            std::cout << std::format("  theme → `{}`\n", name);
+          }
+        }
       } else if (parsed->spec->path == "alias") {
         // `alias`                       → list
         // `alias <name> <expansion...>` → define or replace

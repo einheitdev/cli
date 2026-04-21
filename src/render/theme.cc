@@ -150,6 +150,99 @@ auto DefaultLightTrueColor() -> Theme {
   return t;
 }
 
+auto OceanTheme() -> Theme {
+  Theme t;
+  t.good        = Rgb(0x4EC9B0);  // teal
+  t.warn        = Rgb(0xF5C971);  // sandy
+  t.bad         = Rgb(0xE26D6D);  // coral
+  t.dim         = Rgb(0x5A6A7A);  // deep slate
+  t.emphasis    = Rgb(0xE4F0FA);  // sea-foam white
+  t.info        = Rgb(0x6BB6FF);  // bright blue
+  t.border      = Rgb(0x2A3A4A);  // deep navy
+  t.accent      = Rgb(0x3FA9F5);  // azure
+  t.prompt_user = Rgb(0x5BC8FF);  // cyan
+  t.prompt_at   = Rgb(0x4A5A6A);  // muted navy
+  t.prompt_host = Rgb(0x8FD8C8);  // pale teal
+  return t;
+}
+
+auto ForestTheme() -> Theme {
+  Theme t;
+  t.good        = Rgb(0x85C46C);  // fresh leaf
+  t.warn        = Rgb(0xD4A84B);  // mustard
+  t.bad         = Rgb(0xCB6565);  // rust
+  t.dim         = Rgb(0x5E6A50);  // moss
+  t.emphasis    = Rgb(0xEAE6D8);  // parchment
+  t.info        = Rgb(0x7FB876);  // fern
+  t.border      = Rgb(0x38402E);  // bark
+  t.accent      = Rgb(0xBDD364);  // lime
+  t.prompt_user = Rgb(0xD1B875);  // honey
+  t.prompt_at   = Rgb(0x6A725A);  // grey-green
+  t.prompt_host = Rgb(0x95C89C);  // sage
+  return t;
+}
+
+auto SolarizedDarkTheme() -> Theme {
+  // Ethan Schoonover's Solarized palette mapped to our semantics.
+  Theme t;
+  t.good        = Rgb(0x859900);  // green
+  t.warn        = Rgb(0xB58900);  // yellow
+  t.bad         = Rgb(0xDC322F);  // red
+  t.dim         = Rgb(0x586E75);  // base01
+  t.emphasis    = Rgb(0xFDF6E3);  // base3
+  t.info        = Rgb(0x268BD2);  // blue
+  t.border      = Rgb(0x073642);  // base02
+  t.accent      = Rgb(0x6C71C4);  // violet
+  t.prompt_user = Rgb(0xD33682);  // magenta
+  t.prompt_at   = Rgb(0x657B83);  // base0
+  t.prompt_host = Rgb(0x2AA198);  // cyan
+  return t;
+}
+
+auto HighContrastTheme() -> Theme {
+  // Near-monochromatic — foregrounds are bright, hues muted. Good
+  // on projectors, photocopiers, or for colour-vision-deficient
+  // operators who need maximum legibility.
+  Theme t;
+  t.good        = Rgb(0xFFFFFF);  // pure white
+  t.warn        = Rgb(0xFFD700);  // gold
+  t.bad         = Rgb(0xFF6B6B);  // soft red
+  t.dim         = Rgb(0xA0A0A0);  // mid-grey
+  t.emphasis    = Rgb(0xFFFFFF);
+  t.info        = Rgb(0xE0E0E0);  // near-white
+  t.border      = Rgb(0x808080);
+  t.accent      = Rgb(0xFFFFFF);
+  t.prompt_user = Rgb(0xFFFFFF);
+  t.prompt_at   = Rgb(0xA0A0A0);
+  t.prompt_host = Rgb(0xE0E0E0);
+  return t;
+}
+
+auto NamedTheme(const std::string &name)
+    -> std::optional<Theme> {
+  const std::string n = Lower(name);
+  if (n == "psycho" || n == "psychotropic" || n == "default") {
+    return DefaultDarkTrueColor();
+  }
+  if (n == "ansi" || n == "dark-ansi") return DefaultDarkAnsi();
+  if (n == "ocean") return OceanTheme();
+  if (n == "forest") return ForestTheme();
+  if (n == "solarized" || n == "solarized-dark") {
+    return SolarizedDarkTheme();
+  }
+  if (n == "contrast" || n == "high-contrast") {
+    return HighContrastTheme();
+  }
+  return std::nullopt;
+}
+
+auto NamedThemeList() -> std::vector<std::string> {
+  return {
+      "forest",       "high-contrast", "ocean",
+      "psychotropic", "solarized-dark",
+  };
+}
+
 auto DefaultLightAnsi() -> Theme {
   Theme t;
   t.good        = ftxui::Color::Green;

@@ -29,6 +29,8 @@ enum class StateError {
 struct State {
   /// Target selected by the most recent `use` command.
   std::optional<std::string> active_target;
+  /// Named theme selected by the most recent `theme use` command.
+  std::optional<std::string> active_theme;
 };
 
 /// Default location of the state file.
