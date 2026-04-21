@@ -46,17 +46,16 @@ auto DisplayText(const Cell &c, const TerminalCaps &caps)
   return marker.empty() ? c.text : marker + " " + c.text;
 }
 
-auto ColorFor(Semantic s) -> ftxui::Color {
-  using ftxui::Color;
+auto ColorFor(Semantic s, const Theme &theme) -> ftxui::Color {
   switch (s) {
-    case Semantic::Good:     return Color::GreenLight;
-    case Semantic::Warn:     return Color::YellowLight;
-    case Semantic::Bad:      return Color::RedLight;
-    case Semantic::Dim:      return Color::GrayDark;
-    case Semantic::Emphasis: return Color::White;
-    case Semantic::Info:     return Color::CyanLight;
+    case Semantic::Good:     return theme.good;
+    case Semantic::Warn:     return theme.warn;
+    case Semantic::Bad:      return theme.bad;
+    case Semantic::Dim:      return theme.dim;
+    case Semantic::Emphasis: return theme.emphasis;
+    case Semantic::Info:     return theme.info;
     case Semantic::Default:
-    default:                 return Color::Default;
+    default:                 return ftxui::Color::Default;
   }
 }
 
@@ -146,18 +145,23 @@ auto AlignedElement(const std::string &text, Align align)
 }
 
 auto BuildFtxuiTable(const Table &t, const TerminalCaps &caps,
+                     const Theme &theme,
                      const std::vector<std::size_t> &visible)
     -> ftxui::Element {
   using namespace ftxui;
   std::vector<std::vector<Element>> grid;
 
-  // Header row.
+  // Header row — emphasis colour + bold.
   std::vector<Element> header;
   header.reserve(visible.size());
   for (auto i : visible) {
-    header.push_back(AlignedElement(t.columns[i].header,
-                                    t.columns[i].align) |
-                     bold);
+    Element h = AlignedElement(t.columns[i].header,
+                               t.columns[i].align) |
+                bold;
+    if (!caps.force_plain && caps.colors != ColorDepth::None) {
+      h = h | color(theme.emphasis);
+    }
+    header.push_back(std::move(h));
   }
   grid.push_back(std::move(header));
 
@@ -174,7 +178,7 @@ auto BuildFtxuiTable(const Table &t, const TerminalCaps &caps,
       if (!caps.force_plain &&
           caps.colors != ColorDepth::None &&
           cell.semantic != Semantic::Default) {
-        e = e | color(ColorFor(cell.semantic));
+        e = e | color(ColorFor(cell.semantic, theme));
       }
       if (cell.semantic == Semantic::Emphasis) e = e | bold;
       ftx_row.push_back(std::move(e));
@@ -188,18 +192,26 @@ auto BuildFtxuiTable(const Table &t, const TerminalCaps &caps,
   ftx.SelectAll().SeparatorVertical(border_style);
   ftx.SelectRow(0).Decorate(bold);
   ftx.SelectRow(0).SeparatorHorizontal(border_style);
-  return ftx.Render();
+  Element out = ftx.Render();
+  if (!caps.force_plain && caps.colors != ColorDepth::None) {
+    // Stain the box-drawing with the border colour — the cell
+    // content keeps its own colours because FTXUI applies parent
+    // decorators only to undecorated children.
+    out = out | color(theme.border);
+  }
+  return out;
 }
 
 auto RenderViaFtxui(const Table &t, std::ostream &out,
-                    const TerminalCaps &caps) -> void {
+                    const TerminalCaps &caps, const Theme &theme)
+    -> void {
   using namespace ftxui;
   if (t.columns.empty()) return;
 
   const std::size_t budget = caps.width > 0 ? caps.width : 80;
   auto visible = ChooseVisible(t, caps, budget);
 
-  auto element = BuildFtxuiTable(t, caps, visible);
+  auto element = BuildFtxuiTable(t, caps, theme, visible);
   auto screen = Screen::Create(Dimension::Fit(element),
                                Dimension::Fit(element));
   Render(screen, element);
@@ -223,7 +235,12 @@ auto AddRow(Table &t, std::vector<Cell> row) -> void {
 
 auto Render(const Table &t, std::ostream &out,
             const TerminalCaps &caps) -> void {
-  RenderViaFtxui(t, out, caps);
+  RenderViaFtxui(t, out, caps, PickTheme(caps));
+}
+
+auto Render(const Table &t, std::ostream &out,
+            const TerminalCaps &caps, const Theme &theme) -> void {
+  RenderViaFtxui(t, out, caps, theme);
 }
 
 namespace {
@@ -335,6 +352,7 @@ auto RenderError(const std::string &code, const std::string &message,
     -> void {
   using namespace ftxui;
   const auto &caps = renderer.Caps();
+  const auto &theme = renderer.GetTheme();
   const bool colorful =
       !caps.force_plain && caps.colors != ColorDepth::None;
 
@@ -349,24 +367,24 @@ auto RenderError(const std::string &code, const std::string &message,
   std::vector<Element> lines;
   lines.push_back(hbox({
       text("error  ") | bold |
-          (colorful ? color(Color::RedLight) : nothing),
+          (colorful ? color(theme.bad) : nothing),
       text(code) | bold,
   }));
   lines.push_back(text(message) |
-                  (colorful ? color(Color::RedLight) : nothing));
+                  (colorful ? color(theme.bad) : nothing));
   if (!hint.empty()) {
     lines.push_back(text(""));
     lines.push_back(
         hbox({text("hint: ") | bold |
-                  (colorful ? color(Color::YellowLight) : nothing),
+                  (colorful ? color(theme.warn) : nothing),
               text(hint) |
-                  (colorful ? color(Color::YellowLight) : nothing)}));
+                  (colorful ? color(theme.warn) : nothing)}));
   }
 
   Element body = vbox(std::move(lines));
   Element framed =
       body | borderRounded |
-      (colorful ? color(Color::RedLight) : nothing);
+      (colorful ? color(theme.bad) : nothing);
   auto screen = Screen::Create(Dimension::Fit(framed),
                                Dimension::Fit(framed));
   Render(screen, framed);
@@ -392,7 +410,8 @@ auto RenderFormatted(const Table &t, Renderer &renderer) -> void {
       return;
     case OutputFormat::Table:
     default:
-      Render(t, renderer.Out(), renderer.Caps());
+      Render(t, renderer.Out(), renderer.Caps(),
+             renderer.GetTheme());
       return;
   }
 }

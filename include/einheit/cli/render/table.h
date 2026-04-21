@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "einheit/cli/render/terminal_caps.h"
+#include "einheit/cli/render/theme.h"
 
 namespace einheit::cli::render {
 
@@ -79,12 +80,21 @@ auto AddColumn(Table &t, std::string header,
 auto AddRow(Table &t, std::vector<Cell> row) -> void;
 
 /// Render the table to an output stream according to caps. Always
-/// produces the capability-aware table layout.
+/// produces the capability-aware table layout. Uses the default
+/// truecolor palette.
 /// @param t The table.
 /// @param out Destination stream (stdout or a string for tests).
 /// @param caps Terminal capabilities.
 auto Render(const Table &t, std::ostream &out,
             const TerminalCaps &caps) -> void;
+
+/// Theme-aware overload.
+/// @param t The table.
+/// @param out Destination stream.
+/// @param caps Terminal capabilities.
+/// @param theme Colour palette.
+auto Render(const Table &t, std::ostream &out,
+            const TerminalCaps &caps, const Theme &theme) -> void;
 
 class Renderer;
 
@@ -131,22 +141,29 @@ enum class OutputFormat {
 };
 
 /// Renderer handle passed to adapters via ProductAdapter
-/// render callbacks. Wraps stdout + TerminalCaps so individual
-/// renderers don't have to thread those through themselves.
+/// render callbacks. Wraps stdout + TerminalCaps + Theme + output
+/// format so individual renderers don't thread those through
+/// themselves.
 class Renderer {
  public:
   Renderer(std::ostream &out, TerminalCaps caps,
-           OutputFormat format = OutputFormat::Table) noexcept
-      : out_(&out), caps_(caps), format_(format) {}
+           OutputFormat format = OutputFormat::Table,
+           Theme theme = DefaultDarkTrueColor()) noexcept
+      : out_(&out),
+        caps_(caps),
+        format_(format),
+        theme_(std::move(theme)) {}
 
   auto Out() -> std::ostream & { return *out_; }
   auto Caps() const -> const TerminalCaps & { return caps_; }
   auto Format() const -> OutputFormat { return format_; }
+  auto GetTheme() const -> const Theme & { return theme_; }
 
  private:
   std::ostream *out_;
   TerminalCaps caps_;
   OutputFormat format_;
+  Theme theme_;
 };
 
 }  // namespace einheit::cli::render

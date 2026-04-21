@@ -81,8 +81,21 @@ auto ApplyOverrides(TerminalCaps base, const CapOverrides &overrides)
     base.colors = ColorDepth::None;
   } else if (overrides.color == 1) {
     base.force_plain = false;
+    // When the user explicitly forces colour, pick the richest
+    // depth the env hints at. COLORTERM=truecolor / 24bit is the
+    // canonical signal on modern terminals.
     if (base.colors == ColorDepth::None) {
-      base.colors = ColorDepth::Ansi16;
+      const std::string colorterm = Getenv("COLORTERM");
+      if (colorterm == "truecolor" || colorterm == "24bit") {
+        base.colors = ColorDepth::TrueColor;
+      } else {
+        const std::string term = Getenv("TERM");
+        if (term.find("256color") != std::string::npos) {
+          base.colors = ColorDepth::Ansi256;
+        } else {
+          base.colors = ColorDepth::Ansi16;
+        }
+      }
     }
   }
   if (overrides.force_ascii) base.unicode = false;

@@ -30,63 +30,59 @@ constexpr const char *kLogo[] = {
     " \\___||_|_| |_|_| |_|\\___|_|\\__|",
 };
 
-auto UnicodeBanner(const BannerInfo &info, std::uint16_t width)
-    -> std::string {
+auto UnicodeBanner(const BannerInfo &info, std::uint16_t width,
+                   const Theme &theme) -> std::string {
   using namespace ftxui;
 
-  // Logo column — cyan tinted figlet-standard lettering.
   constexpr int kLogoWidth = 33;
   std::vector<Element> logo_lines;
   for (const char *line : kLogo) {
-    logo_lines.push_back(text(line) | color(Color::CyanLight));
+    logo_lines.push_back(text(line) | color(theme.accent));
   }
 
-  // Info column — left-aligned text, fills remaining width. Names
-  // render lowercase for consistency with the logo.
   auto to_lower = [](std::string s) {
     for (auto &c : s) c = static_cast<char>(std::tolower(c));
     return s;
   };
   std::vector<Element> info_lines;
-  info_lines.push_back(text(to_lower(info.product_name)) | bold);
+  info_lines.push_back(text(to_lower(info.product_name)) | bold |
+                       color(theme.emphasis));
   info_lines.push_back(
       text(std::format("adapter: {}   version: {}",
                        info.adapter_name, info.version)) |
-      color(Color::GrayDark));
+      color(theme.dim));
   if (!info.target_name.empty()) {
     info_lines.push_back(
         text(std::format("target: {}", info.target_name)) |
-        color(Color::Blue));
+        color(theme.info));
   }
   if (info.learning_mode) {
     info_lines.push_back(
         text("learning mode — state is in-memory") |
-        color(Color::Yellow) | bold);
+        color(theme.warn) | bold);
   }
   if (!info.tip.empty()) {
     info_lines.push_back(
         text(std::format("tip: {}", info.tip)) |
-        color(Color::GrayLight));
+        color(theme.dim));
   }
 
   Element logo_col =
       vbox(std::move(logo_lines)) | size(WIDTH, EQUAL, kLogoWidth);
   Element info_col = vbox(std::move(info_lines)) | vcenter | flex;
 
-  // One-line padding above and below the content so the logo has
-  // room to breathe inside the border.
   Element body = vbox({
       text(""),
       hbox({text("  "), logo_col, text("    "), info_col,
             text("  ")}),
       text(""),
   });
-  Element framed = body | border | color(Color::GrayLight);
+  Element framed = body | border | color(theme.border);
 
   const int total_width =
       width > 0 ? static_cast<int>(width) : 80;
-  auto screen = Screen::Create(
-      Dimension::Fixed(total_width), Dimension::Fit(framed));
+  auto screen = Screen::Create(Dimension::Fixed(total_width),
+                               Dimension::Fit(framed));
   Render(screen, framed);
   return screen.ToString() + "\n";
 }
@@ -111,11 +107,16 @@ auto AsciiBanner(const BannerInfo &info) -> std::string {
 
 auto Banner(const BannerInfo &info, const TerminalCaps &caps)
     -> std::string {
+  return Banner(info, caps, PickTheme(caps));
+}
+
+auto Banner(const BannerInfo &info, const TerminalCaps &caps,
+            const Theme &theme) -> std::string {
   if (caps.force_plain || !caps.unicode ||
       caps.colors == ColorDepth::None) {
     return AsciiBanner(info);
   }
-  return UnicodeBanner(info, caps.width);
+  return UnicodeBanner(info, caps.width, theme);
 }
 
 auto DefaultTips() -> std::vector<std::string> {

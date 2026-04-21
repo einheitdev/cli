@@ -240,7 +240,8 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
   binfo.learning_mode = s.learning_mode;
   binfo.target_name = s.target_name;
   binfo.tip = render::PickTip();
-  std::cout << render::Banner(binfo, s.caps);
+  const auto theme = render::PickTheme(s.caps);
+  std::cout << render::Banner(binfo, s.caps, theme);
 
   // Mini tutorial in learning mode — gives first-time users a
   // concrete path to try.
@@ -264,7 +265,8 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
 
   s.stats.start = std::chrono::steady_clock::now();
 
-  render::Renderer renderer(std::cout, s.caps);
+  render::Renderer renderer(std::cout, s.caps,
+                            render::OutputFormat::Table, theme);
 
   // Best-effort history load; absence of a backing file is fine.
   History history;
@@ -440,7 +442,8 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
       // Buffer the adapter's output so we can decide whether to
       // page it based on line count vs terminal height.
       std::ostringstream buf;
-      render::Renderer buffered(buf, s.caps, renderer.Format());
+      render::Renderer buffered(buf, s.caps, renderer.Format(),
+                                renderer.GetTheme());
       try {
         s.adapter->RenderResponse(*parsed->spec, *result->response,
                                   buffered);

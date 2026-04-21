@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "einheit/cli/render/terminal_caps.h"
+#include "einheit/cli/render/theme.h"
 
 namespace einheit::cli::render {
 
@@ -47,11 +48,20 @@ auto PickTip() -> std::string;
 /// Render the banner to a string. Output includes a trailing
 /// newline. Uses unicode box characters + ANSI colour when caps
 /// allow; otherwise falls back to `+-|` borders and plain text.
+/// Uses PickTheme(caps) for colours.
 /// @param info Banner fields.
 /// @param caps Terminal capabilities.
 /// @returns Rendered banner ready for `std::cout`.
 auto Banner(const BannerInfo &info, const TerminalCaps &caps)
     -> std::string;
+
+/// Theme-aware overload.
+/// @param info Banner fields.
+/// @param caps Terminal capabilities.
+/// @param theme Colour palette.
+/// @returns Rendered banner.
+auto Banner(const BannerInfo &info, const TerminalCaps &caps,
+            const Theme &theme) -> std::string;
 
 }  // namespace einheit::cli::render
 
