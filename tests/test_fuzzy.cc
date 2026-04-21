@@ -52,13 +52,25 @@ TEST(Fuzzy, SuggestsHostnameTypo) {
   EXPECT_EQ(s.front(), "hostname");
 }
 
-TEST(Fuzzy, RanksByDistanceAscending) {
+TEST(Fuzzy, PrefixMatchWinsOverEditDistance) {
   const std::vector<std::string> vocab{"show", "shows", "sho"};
   auto s = Suggest("show", vocab);
-  // All three are within threshold; "shows" and "sho" both distance 1.
+  // Both "shows" and "sho" are edit-distance 1. "shows" starts
+  // with "show" (prefix score 0) so it ranks first; "sho" is not
+  // a prefix (query longer than candidate) and ranks second.
   ASSERT_EQ(s.size(), 2u);
-  EXPECT_EQ(s[0], "sho");    // alphabetical tie break
-  EXPECT_EQ(s[1], "shows");
+  EXPECT_EQ(s[0], "shows");
+  EXPECT_EQ(s[1], "sho");
+}
+
+TEST(Fuzzy, TypedPrefixPicksLongerWordPastThreshold) {
+  // Classic case: user types "config", the canonical command is
+  // "configure" — edit distance 3 but a clear prefix match.
+  const std::vector<std::string> vocab{"configure", "commit",
+                                        "rollback"};
+  auto s = Suggest("config", vocab);
+  ASSERT_FALSE(s.empty());
+  EXPECT_EQ(s.front(), "configure");
 }
 
 }  // namespace einheit::cli::fuzzy

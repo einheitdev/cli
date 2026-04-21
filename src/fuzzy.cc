@@ -55,21 +55,42 @@ auto Suggest(const std::string &query,
     -> std::vector<std::string> {
   const std::size_t threshold = ThresholdFor(query.size());
 
-  std::vector<std::pair<std::size_t, std::string>> scored;
+  // Score = (not_a_prefix, edit_distance). Prefix matches sort
+  // first because typing an unambiguous shorthand ("config") for a
+  // longer command ("configure") is the most common case — pure
+  // edit distance penalises it disproportionately.
+  struct Entry {
+    int prefix_score;
+    std::size_t distance;
+    std::string word;
+  };
+  std::vector<Entry> scored;
   for (const auto &word : vocabulary) {
     if (word == query) continue;
+    const bool is_prefix =
+        !query.empty() && word.size() >= query.size() &&
+        word.compare(0, query.size(), query) == 0;
     const auto d = Distance(query, word);
-    if (d <= threshold) scored.emplace_back(d, word);
+    if (is_prefix) {
+      scored.push_back({0, d, word});
+    } else if (d <= threshold) {
+      scored.push_back({1, d, word});
+    }
   }
   std::sort(scored.begin(), scored.end(),
-            [](const auto &lhs, const auto &rhs) {
-              if (lhs.first != rhs.first) return lhs.first < rhs.first;
-              return lhs.second < rhs.second;
+            [](const Entry &lhs, const Entry &rhs) {
+              if (lhs.prefix_score != rhs.prefix_score) {
+                return lhs.prefix_score < rhs.prefix_score;
+              }
+              if (lhs.distance != rhs.distance) {
+                return lhs.distance < rhs.distance;
+              }
+              return lhs.word < rhs.word;
             });
 
   std::vector<std::string> out;
   out.reserve(scored.size());
-  for (auto &[_, word] : scored) out.push_back(std::move(word));
+  for (auto &e : scored) out.push_back(std::move(e.word));
   return out;
 }
 
