@@ -61,6 +61,11 @@ struct Shell {
   /// Resolved target name when `--target` / `einheit use` is active.
   std::string target_name;
 
+  /// Optional path of a record file; every accepted command line
+  /// is appended here as it's entered. Replay by feeding the file
+  /// back via stdin or `--replay`.
+  std::string record_path;
+
   /// Running totals for the session summary printed on exit.
   struct Stats {
     std::size_t commands = 0;

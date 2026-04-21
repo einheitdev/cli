@@ -206,6 +206,13 @@ auto main(int argc, char **argv) -> int {
   app.add_option("--theme", theme_path,
                  "Path to a theme YAML (default "
                  "~/.einheit/theme.yaml)");
+  std::string record_path;
+  std::string replay_path;
+  app.add_option("--record", record_path,
+                 "Append every accepted command to this file");
+  app.add_option("--replay", replay_path,
+                 "Re-run a session from a recorded file "
+                 "(lines starting with `#` are skipped)");
 
   // Client-side subcommands that don't need a transport.
   auto *key_cmd = app.add_subcommand(
@@ -289,6 +296,20 @@ auto main(int argc, char **argv) -> int {
   s.caps = caps;
   s.learning_mode = learn;
   s.target_name = target;
+  s.record_path = record_path;
+
+  // --replay redirects stdin so the existing std::getline / readline
+  // path reads the file line-by-line. readline's recordless mode
+  // kicks in automatically because stdin is no longer a TTY.
+  if (!replay_path.empty()) {
+    if (!std::freopen(replay_path.c_str(), "r", stdin)) {
+      std::cerr << std::format("replay: could not open {}\n",
+                               replay_path);
+      return 1;
+    }
+    std::cerr << std::format("REPLAY — reading from {}\n",
+                             replay_path);
+  }
 
   // Theme selection: --light / --dark win over auto-detect, and a
   // YAML at --theme (or ~/.einheit/theme.yaml) overrides whichever

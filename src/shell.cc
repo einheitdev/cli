@@ -14,6 +14,7 @@
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <iostream>
 #include <random>
 #include <ranges>
@@ -330,6 +331,26 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
   History history;
   if (auto h = Load(s.caller.user); h) history = *h;
 
+  // Optional recording file. Every accepted command lands here,
+  // one per line, so `einheit --replay file` (or piping the file
+  // back as stdin) re-runs the same session.
+  std::unique_ptr<std::ofstream> record;
+  if (!s.record_path.empty()) {
+    std::filesystem::create_directories(
+        std::filesystem::path(s.record_path).parent_path());
+    record = std::make_unique<std::ofstream>(s.record_path,
+                                             std::ios::trunc);
+    if (!record->is_open()) {
+      std::cerr << std::format(
+          "record: could not open {}\n", s.record_path);
+      record.reset();
+    } else {
+      *record << std::format(
+          "# einheit session recording — {} commands follow\n",
+          s.caller.user);
+    }
+  }
+
   // Merge legacy k=v aliases with the YAML file at
   // ~/.einheit/aliases.yaml (if present). YAML wins on conflict.
   Aliases aliases;
@@ -398,6 +419,8 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
     }
     auto raw = reader->ReadLine(PromptFor(s, meta, theme));
     if (!raw) break;
+    // Comment lines let recorded session files carry annotations.
+    if (!raw->empty() && (*raw)[0] == '#') continue;
 
     // History expansion: `!!` reruns the last entry, `!N` reruns
     // entry N, `!pfx` reruns the last matching prefix. Failure
@@ -422,6 +445,10 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
     const auto line = Expand(aliases, expanded);
     if (line.empty()) continue;
     reader->AddHistory(line);
+    if (record) {
+      *record << line << '\n';
+      record->flush();
+    }
 
     auto tokens = Tokenize(line);
     // `time <cmd>` prefix — strip it, wrap the dispatch with a
