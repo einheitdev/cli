@@ -140,21 +140,17 @@ auto PromptFor(const Shell &s, const ProductMetadata &meta,
     return std::format("{}{} ", prefix, glyph);
   }
 
-  // Wrap every ANSI escape in readline's "non-printing" brackets
-  // (\x01 .. \x02) so readline doesn't count them toward the
-  // cursor column. Without these, typing past the assumed prompt
-  // width corrupts the line as characters reach the right edge.
-  constexpr const char *kBegin = "\x01";
-  constexpr const char *kEnd = "\x02";
-  const auto wrap = [&](const std::string &ansi) {
-    return std::format("{}{}{}", kBegin, ansi, kEnd);
-  };
-  const auto reset = wrap("\x1b[0m");
-  const auto user_color = wrap(render::FgAnsi(theme.prompt_user));
-  const auto at_color = wrap(render::FgAnsi(theme.prompt_at));
-  const auto host_color = wrap(render::FgAnsi(theme.prompt_host));
-  const auto mode_color = wrap(render::FgAnsi(
-      s.session.in_configure ? theme.warn : theme.accent));
+  // replxx parses ANSI colour escapes in the prompt natively and
+  // accounts for them correctly when measuring cursor width, so
+  // we emit the raw escapes directly. (Readline needed \x01..\x02
+  // wrapping; replxx would render those bytes as printable glyphs
+  // and miscount width.)
+  constexpr const char *reset = "\x1b[0m";
+  const auto user_color = render::FgAnsi(theme.prompt_user);
+  const auto at_color = render::FgAnsi(theme.prompt_at);
+  const auto host_color = render::FgAnsi(theme.prompt_host);
+  const auto mode_color = render::FgAnsi(
+      s.session.in_configure ? theme.warn : theme.accent);
 
   std::string prefix;
   if (s.caller.user.empty()) {
