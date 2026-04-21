@@ -60,47 +60,53 @@ auto NewRequestId() -> std::string {
   return std::format("{:016x}{:016x}", rng(), rng());
 }
 
-auto StatusBar(const Shell &s) -> std::string {
+auto StatusBar(const Shell &s, const render::Theme &theme)
+    -> std::string {
   const bool color_ok =
       !s.caps.force_plain &&
       s.caps.colors != render::ColorDepth::None;
   constexpr const char *kReset = "\x1b[0m";
-  constexpr const char *kDim = "\x1b[90m";
-  constexpr const char *kGreen = "\x1b[32m";
-  constexpr const char *kYellow = "\x1b[33m";
-  constexpr const char *kRed = "\x1b[31m";
-  const auto c = [&](const char *ansi, const std::string &t) {
+  const auto dim = color_ok ? render::FgAnsi(theme.dim)
+                             : std::string();
+  const auto good = color_ok ? render::FgAnsi(theme.good)
+                              : std::string();
+  const auto warn = color_ok ? render::FgAnsi(theme.warn)
+                              : std::string();
+  const auto bad = color_ok ? render::FgAnsi(theme.bad)
+                             : std::string();
+  const auto c = [&](const std::string &ansi,
+                     const std::string &t) {
     return color_ok ? std::format("{}{}{}", ansi, t, kReset) : t;
   };
 
   std::vector<std::string> chips;
   chips.push_back(
-      c(kDim, std::format("● {} cmds", s.stats.commands)));
+      c(dim, std::format("● {} cmds", s.stats.commands)));
   if (s.stats.commits > 0) {
     chips.push_back(
-        c(kGreen, std::format("✓ {} commits", s.stats.commits)));
+        c(good, std::format("✓ {} commits", s.stats.commits)));
   }
   if (s.stats.errors > 0) {
     chips.push_back(
-        c(kRed, std::format("✗ {} errors", s.stats.errors)));
+        c(bad, std::format("✗ {} errors", s.stats.errors)));
   }
   if (s.session.in_configure) {
-    chips.push_back(c(kYellow, "◆ configure"));
+    chips.push_back(c(warn, "◆ configure"));
   }
   if (s.session.confirm_deadline) {
-    chips.push_back(c(kYellow, "⏱ commit-confirm pending"));
+    chips.push_back(c(warn, "⏱ commit-confirm pending"));
   }
 
   std::string out;
   for (std::size_t i = 0; i < chips.size(); ++i) {
-    if (i > 0) out += c(kDim, " · ");
+    if (i > 0) out += c(dim, " · ");
     out += chips[i];
   }
   return out.empty() ? std::string{} : out + "\n";
 }
 
-auto PromptFor(const Shell &s, const ProductMetadata &meta)
-    -> std::string {
+auto PromptFor(const Shell &s, const ProductMetadata &meta,
+               const render::Theme &theme) -> std::string {
   const bool color_ok =
       !s.caps.force_plain &&
       s.caps.colors != render::ColorDepth::None;
@@ -115,13 +121,11 @@ auto PromptFor(const Shell &s, const ProductMetadata &meta)
   if (!color_ok) {
     return std::format("{}{} ", prefix, glyph);
   }
-  // dim the user@host, colour the mode glyph (yellow in configure,
-  // cyan in operational) so mode is always visually obvious.
   constexpr const char *kReset = "\x1b[0m";
-  constexpr const char *kDim = "\x1b[90m";
-  const char *mode_color =
-      s.session.in_configure ? "\x1b[33m" : "\x1b[36m";
-  return std::format("{}{}{} {}{}{} ", kDim, prefix, kReset,
+  const auto user_color = render::FgAnsi(theme.prompt_user);
+  const auto mode_color = render::FgAnsi(
+      s.session.in_configure ? theme.warn : theme.accent);
+  return std::format("{}{}{} {}{}{} ", user_color, prefix, kReset,
                      mode_color, glyph, kReset);
 }
 
@@ -240,7 +244,8 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
   binfo.learning_mode = s.learning_mode;
   binfo.target_name = s.target_name;
   binfo.tip = render::PickTip();
-  const auto theme = render::PickTheme(s.caps);
+  const auto theme = s.theme.value_or(
+      render::PickTheme(s.caps, render::DetectLightTerminal()));
   std::cout << render::Banner(binfo, s.caps, theme);
 
   // Mini tutorial in learning mode — gives first-time users a
@@ -325,9 +330,9 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
       });
 
   while (true) {
-    const auto status = StatusBar(s);
+    const auto status = StatusBar(s, theme);
     auto raw = reader->ReadLine(
-        std::format("{}{}", status, PromptFor(s, meta)));
+        std::format("{}{}", status, PromptFor(s, meta, theme)));
     if (!raw) break;
 
     // History expansion: `!!` reruns the last entry, `!N` reruns

@@ -21,6 +21,7 @@
 #include "einheit/cli/learning_daemon.h"
 #include "einheit/cli/render/table.h"
 #include "einheit/cli/render/terminal_caps.h"
+#include "einheit/cli/render/theme.h"
 #include "einheit/cli/schema.h"
 #include "einheit/cli/shell.h"
 #include "einheit/cli/target_config.h"
@@ -194,6 +195,17 @@ auto main(int argc, char **argv) -> int {
                "(no real appliance needed)");
   app.add_flag("--trace", trace,
                "Print wire traffic on stderr (best with --learn)");
+  bool force_light = false;
+  bool force_dark = false;
+  std::string theme_path;
+  app.add_flag("--light", force_light,
+               "Use the light-background palette");
+  app.add_flag("--dark", force_dark,
+               "Force the dark palette even when COLORFGBG "
+               "indicates a light background");
+  app.add_option("--theme", theme_path,
+                 "Path to a theme YAML (default "
+                 "~/.einheit/theme.yaml)");
 
   // Client-side subcommands that don't need a transport.
   auto *key_cmd = app.add_subcommand(
@@ -277,6 +289,36 @@ auto main(int argc, char **argv) -> int {
   s.caps = caps;
   s.learning_mode = learn;
   s.target_name = target;
+
+  // Theme selection: --light / --dark win over auto-detect, and a
+  // YAML at --theme (or ~/.einheit/theme.yaml) overrides whichever
+  // base palette we picked.
+  const bool prefer_light =
+      force_light ||
+      (!force_dark && render::DetectLightTerminal());
+  auto base_theme = render::PickTheme(caps, prefer_light);
+  std::string chosen_theme_path = theme_path;
+  if (chosen_theme_path.empty()) {
+    if (const char *home = std::getenv("HOME"); home) {
+      const auto default_path =
+          std::format("{}/.einheit/theme.yaml", home);
+      if (std::filesystem::exists(default_path)) {
+        chosen_theme_path = default_path;
+      }
+    }
+  }
+  if (!chosen_theme_path.empty()) {
+    if (auto loaded =
+            render::LoadTheme(chosen_theme_path, base_theme);
+        loaded) {
+      base_theme = *loaded;
+    } else {
+      std::cerr << std::format("theme: {}\n",
+                               loaded.error().message);
+    }
+  }
+  s.theme = base_theme;
+
   BuildTreeWithAdapter(s.tree, *adapter);
   s.adapter = std::move(adapter);
 

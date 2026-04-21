@@ -39,7 +39,7 @@ struct Theme {
   ftxui::Color prompt_user;  // user@target prefix
 };
 
-/// Rich 24-bit dark palette — primary theme on modern terminals.
+/// Rich 24-bit dark palette — primary theme on dark terminals.
 /// @returns Truecolor dark theme.
 auto DefaultDarkTrueColor() -> Theme;
 
@@ -47,10 +47,36 @@ auto DefaultDarkTrueColor() -> Theme;
 /// @returns ANSI dark theme.
 auto DefaultDarkAnsi() -> Theme;
 
-/// Pick a sensible theme based on caps.
+/// Rich 24-bit light palette — mirror of the dark palette with
+/// darker foregrounds chosen to read on a white / cream background.
+/// @returns Truecolor light theme.
+auto DefaultLightTrueColor() -> Theme;
+
+/// ANSI-16 light palette — non-bright variants so colours carry
+/// enough contrast on a light terminal.
+/// @returns ANSI light theme.
+auto DefaultLightAnsi() -> Theme;
+
+/// Best-effort detection: does the terminal have a light background?
+/// Reads COLORFGBG (e.g. "0;15") — values of 7, 15, or >= 10 in the
+/// background slot indicate a light terminal.
+/// @returns True when the terminal likely uses a light background.
+auto DetectLightTerminal() -> bool;
+
+/// Pick a sensible theme based on caps + environment. When
+/// `prefer_light` is true, picks a light palette; otherwise dark.
 /// @param caps Terminal capabilities.
+/// @param prefer_light Force the light variant.
 /// @returns The theme that best matches the current terminal.
-auto PickTheme(const TerminalCaps &caps) -> Theme;
+auto PickTheme(const TerminalCaps &caps, bool prefer_light = false)
+    -> Theme;
+
+/// Produce a raw ANSI SGR sequence for the given foreground colour,
+/// suitable for use in prompts and status lines drawn without the
+/// FTXUI screen layer. Returns "" when the colour is Default.
+/// @param c Foreground colour.
+/// @returns ANSI escape, e.g. "\x1b[38;2;122;162;247m".
+auto FgAnsi(ftxui::Color c) -> std::string;
 
 /// Errors raised by theme loading.
 enum class ThemeError {

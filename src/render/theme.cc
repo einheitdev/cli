@@ -126,15 +126,71 @@ auto DefaultDarkAnsi() -> Theme {
   return t;
 }
 
-auto PickTheme(const TerminalCaps &caps) -> Theme {
+auto DefaultLightTrueColor() -> Theme {
+  // Darker foregrounds so each semantic carries enough contrast on
+  // a near-white background. Same hues as the dark theme but lower
+  // L* values.
+  Theme t;
+  t.good        = Rgb(0x3E7F2B);  // deep forest lime
+  t.warn        = Rgb(0xB06B00);  // burnt amber
+  t.bad         = Rgb(0xBF3C4F);  // wine coral
+  t.dim         = Rgb(0x737B85);  // mid-slate
+  t.emphasis    = Rgb(0x1C1D22);  // near-black, slight warm
+  t.info        = Rgb(0x0077AA);  // ocean blue
+  t.border      = Rgb(0xC3C7D0);  // pale steel
+  t.accent      = Rgb(0x3351A9);  // royal blue
+  t.prompt_user = Rgb(0x6A6F7A);  // mid-grey
+  return t;
+}
+
+auto DefaultLightAnsi() -> Theme {
+  Theme t;
+  t.good        = ftxui::Color::Green;
+  t.warn        = ftxui::Color::Yellow;
+  t.bad         = ftxui::Color::Red;
+  t.dim         = ftxui::Color::GrayLight;
+  t.emphasis    = ftxui::Color::Black;
+  t.info        = ftxui::Color::Blue;
+  t.border      = ftxui::Color::GrayDark;
+  t.accent      = ftxui::Color::Blue;
+  t.prompt_user = ftxui::Color::GrayLight;
+  return t;
+}
+
+auto DetectLightTerminal() -> bool {
+  const char *env = std::getenv("COLORFGBG");
+  if (!env) return false;
+  std::string s(env);
+  const auto last = s.find_last_of(';');
+  if (last == std::string::npos) return false;
+  try {
+    const int bg = std::stoi(s.substr(last + 1));
+    return bg == 7 || bg >= 10;
+  } catch (...) {
+    return false;
+  }
+}
+
+auto PickTheme(const TerminalCaps &caps, bool prefer_light) -> Theme {
+  const bool truecolor =
+      !caps.force_plain &&
+      (caps.colors == ColorDepth::TrueColor ||
+       caps.colors == ColorDepth::Ansi256);
+  if (prefer_light) {
+    return truecolor ? DefaultLightTrueColor() : DefaultLightAnsi();
+  }
   if (caps.force_plain || caps.colors == ColorDepth::None) {
-    return DefaultDarkAnsi();  // ignored when caller suppresses
+    return DefaultDarkAnsi();
   }
-  if (caps.colors == ColorDepth::TrueColor ||
-      caps.colors == ColorDepth::Ansi256) {
-    return DefaultDarkTrueColor();
-  }
-  return DefaultDarkAnsi();
+  return truecolor ? DefaultDarkTrueColor() : DefaultDarkAnsi();
+}
+
+auto FgAnsi(ftxui::Color c) -> std::string {
+  // FTXUI has Color::Print(background) returning an SGR. Wrap it in
+  // ESC[..m brackets — Print returns only the payload digits.
+  std::string payload = c.Print(/*is_background_color=*/false);
+  if (payload.empty()) return "";
+  return std::format("\x1b[{}m", payload);
 }
 
 auto ParseColor(const std::string &name, ftxui::Color fallback)

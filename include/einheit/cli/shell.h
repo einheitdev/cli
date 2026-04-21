@@ -21,6 +21,7 @@
 #include "einheit/cli/error.h"
 #include "einheit/cli/protocol/envelope.h"
 #include "einheit/cli/render/terminal_caps.h"
+#include "einheit/cli/render/theme.h"
 #include "einheit/cli/session.h"
 #include "einheit/cli/transport/transport.h"
 
@@ -47,6 +48,9 @@ struct Shell {
   CommandTree tree;
   /// Effective terminal capabilities.
   render::TerminalCaps caps;
+  /// Colour palette used by every renderer in the shell. If left
+  /// default-constructed, RunShell picks one via PickTheme(caps).
+  std::optional<render::Theme> theme;
   /// Candidate-config session state.
   Session session;
   /// Resolved caller identity for this session.
