@@ -124,23 +124,32 @@ auto PromptFor(const Shell &s, const ProductMetadata &meta,
     return std::format("{}{} ", prefix, glyph);
   }
 
-  constexpr const char *kReset = "\x1b[0m";
-  const auto user_color = render::FgAnsi(theme.prompt_user);
-  const auto at_color = render::FgAnsi(theme.prompt_at);
-  const auto host_color = render::FgAnsi(theme.prompt_host);
-  const auto mode_color = render::FgAnsi(
-      s.session.in_configure ? theme.warn : theme.accent);
+  // Wrap every ANSI escape in readline's "non-printing" brackets
+  // (\x01 .. \x02) so readline doesn't count them toward the
+  // cursor column. Without these, typing past the assumed prompt
+  // width corrupts the line as characters reach the right edge.
+  constexpr const char *kBegin = "\x01";
+  constexpr const char *kEnd = "\x02";
+  const auto wrap = [&](const std::string &ansi) {
+    return std::format("{}{}{}", kBegin, ansi, kEnd);
+  };
+  const auto reset = wrap("\x1b[0m");
+  const auto user_color = wrap(render::FgAnsi(theme.prompt_user));
+  const auto at_color = wrap(render::FgAnsi(theme.prompt_at));
+  const auto host_color = wrap(render::FgAnsi(theme.prompt_host));
+  const auto mode_color = wrap(render::FgAnsi(
+      s.session.in_configure ? theme.warn : theme.accent));
 
   std::string prefix;
   if (s.caller.user.empty()) {
-    prefix = std::format("{}{}{}", host_color, host, kReset);
+    prefix = std::format("{}{}{}", host_color, host, reset);
   } else {
     prefix = std::format("{}{}{}{}@{}{}{}{}", user_color,
-                         s.caller.user, kReset, at_color, kReset,
-                         host_color, host, kReset);
+                         s.caller.user, reset, at_color, reset,
+                         host_color, host, reset);
   }
   return std::format("{} {}{}{} ", prefix, mode_color, glyph,
-                     kReset);
+                     reset);
 }
 
 auto BuildRequest(const ParsedCommand &parsed, const Shell &s)
@@ -355,9 +364,13 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
       });
 
   while (true) {
-    const auto status = StatusBar(s, theme);
-    auto raw = reader->ReadLine(
-        std::format("{}{}", status, PromptFor(s, meta, theme)));
+    // Status bar is its own line above the prompt so readline
+    // doesn't see an embedded newline or unwrapped ANSI in what
+    // it thinks is a single-line prompt.
+    if (const auto status = StatusBar(s, theme); !status.empty()) {
+      std::cout << status << std::flush;
+    }
+    auto raw = reader->ReadLine(PromptFor(s, meta, theme));
     if (!raw) break;
 
     // History expansion: `!!` reruns the last entry, `!N` reruns
