@@ -96,21 +96,22 @@ auto ReadColor(const YAML::Node &n, const std::string &key,
 }  // namespace
 
 auto DefaultDarkTrueColor() -> Theme {
-  // Curated dark palette tuned so the six semantics read cleanly
-  // against a dark-grey / near-black background. Loosely
-  // Tokyo-Night-ish but our own picks.
+  // Psychotropic palette — hues lifted from karl's nvim colourscheme
+  // (psychotropic.nvim). Louder and more playful than a typical
+  // terminal theme, but each semantic stays distinct against a
+  // near-black background.
   Theme t;
-  t.good        = Rgb(0x9ECE6A);  // vivid lime — success
-  t.warn        = Rgb(0xE0AF68);  // soft amber — caution
-  t.bad         = Rgb(0xF7768E);  // coral — failure
-  t.dim         = Rgb(0x6B7280);  // slate grey — muted context
-  t.emphasis    = Rgb(0xE4E7EF);  // near-white, slight blue cast
-  t.info        = Rgb(0x7DCFFF);  // sky blue — labels
-  t.border      = Rgb(0x3B4048);  // muted steel
-  t.accent      = Rgb(0x7AA2F7);  // periwinkle — logo + prompt glyph
-  t.prompt_user = Rgb(0xBB9AF7);  // lavender — the `user` part
-  t.prompt_at   = Rgb(0x545C7E);  // dim slate — the `@` separator
-  t.prompt_host = Rgb(0x7DCFFF);  // sky blue — the host part
+  t.good        = Rgb(0x99DA3D);  // lime — success, additions
+  t.warn        = Rgb(0xF9CB52);  // khaki — caution, changes
+  t.bad         = Rgb(0xFF5454);  // red — failure, removals
+  t.dim         = Rgb(0x626262);  // grey39 — muted context
+  t.emphasis    = Rgb(0xF6FAFA);  // near-white — headers
+  t.info        = Rgb(0x4DB9F4);  // electric blue — labels
+  t.border      = Rgb(0x4E4E4E);  // grey30 — table rules
+  t.accent      = Rgb(0xE061F9);  // violet — logo + prompt glyph
+  t.prompt_user = Rgb(0xADADF3);  // lavender — the `user` part
+  t.prompt_at   = Rgb(0x808080);  // grey50 — the `@` separator
+  t.prompt_host = Rgb(0x7FD3A5);  // turquoise — the host part
   return t;
 }
 

@@ -1,22 +1,22 @@
-# Example theme for einheit-cli.
+# Example theme for einheit-cli — "psychotropic" palette.
 #
 # Copy to ~/.einheit/theme.yaml. Values accept either FTXUI enum
 # names (GreenLight, Yellow, CyanLight, …) or #RRGGBB hex literals.
 # Unset keys keep their built-in defaults.
 
 # Semantic colours
-good:     "#9ECE6A"     # vivid lime — healthy, committed, active
-warn:     "#E0AF68"     # soft amber — degraded, about to change
-bad:      "#F7768E"     # coral — failed, denied, dropped
-dim:      "#6B7280"     # slate grey — muted context, timestamps
-emphasis: "#E4E7EF"     # near-white — headers, important values
-info:     "#7DCFFF"     # sky blue — labels, neutral highlights
+good:     "#99DA3D"     # lime — healthy, committed, active, +added
+warn:     "#F9CB52"     # khaki — caution, ~changed
+bad:      "#FF5454"     # red — failed, denied, -removed
+dim:      "#626262"     # grey39 — muted context
+emphasis: "#F6FAFA"     # near-white — headers, important values
+info:     "#4DB9F4"     # electric blue — labels, neutral highlights
 
 # Chrome
-border:      "#3B4048"  # table + box borders
-accent:      "#7AA2F7"  # logo + prompt glyph
+border:      "#4E4E4E"  # grey30 — header rule, column separators
+accent:      "#E061F9"  # violet — logo + prompt glyph
 
 # Prompt — user @ host rendered with three distinct colours
-prompt_user: "#BB9AF7"  # lavender — the `user` part
-prompt_at:   "#545C7E"  # dim slate — the `@` separator
-prompt_host: "#7DCFFF"  # sky blue — the host part
+prompt_user: "#ADADF3"  # lavender — the `user` part
+prompt_at:   "#808080"  # grey50 — the `@` separator
+prompt_host: "#7FD3A5"  # turquoise — the host part

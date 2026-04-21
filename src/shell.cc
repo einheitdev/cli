@@ -262,22 +262,26 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
   std::cout << render::Banner(binfo, s.caps, theme);
 
   // Mini tutorial in learning mode — gives first-time users a
-  // concrete path to try.
+  // concrete path to try. Uses theme colours so it matches the
+  // rest of the shell chrome.
   if (s.learning_mode) {
     const bool colorful =
         !s.caps.force_plain &&
         s.caps.colors != render::ColorDepth::None;
-    constexpr const char *kDim = "\x1b[90m";
-    constexpr const char *kCyan = "\x1b[36m";
     constexpr const char *kReset = "\x1b[0m";
-    const auto c = [&](const char *ansi, const std::string &t) {
+    const auto dim = colorful ? render::FgAnsi(theme.dim)
+                               : std::string();
+    const auto accent = colorful ? render::FgAnsi(theme.accent)
+                                  : std::string();
+    const auto c = [&](const std::string &ansi,
+                       const std::string &t) {
       return colorful ? std::format("{}{}{}", ansi, t, kReset) : t;
     };
-    std::cout << c(kDim, "try:  ") << c(kCyan, "show schema")
-              << c(kDim, "  →  ") << c(kCyan, "configure")
-              << c(kDim, "  →  ")
-              << c(kCyan, "set hostname demo")
-              << c(kDim, "  →  ") << c(kCyan, "commit")
+    std::cout << c(dim, "try:  ") << c(accent, "show schema")
+              << c(dim, "  →  ") << c(accent, "configure")
+              << c(dim, "  →  ")
+              << c(accent, "set hostname demo")
+              << c(dim, "  →  ") << c(accent, "commit")
               << "\n\n";
   }
 
