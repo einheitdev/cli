@@ -152,14 +152,9 @@ class ExampleAdapter : public ProductAdapter {
     using einheit::cli::render::Semantic;
 
     if (response.error) {
-      einheit::cli::render::Table t;
-      AddColumn(t, "error", Align::Left, Priority::High);
-      AddColumn(t, "message", Align::Left, Priority::High);
-      AddRow(t, {
-          Cell{response.error->code, Semantic::Bad},
-          Cell{response.error->message, Semantic::Bad},
-      });
-      RenderFormatted(t, renderer);
+      einheit::cli::render::RenderError(
+          response.error->code, response.error->message,
+          response.error->hint, renderer);
       return;
     }
 

@@ -173,7 +173,20 @@ auto HandleRequest(LearningDaemon::Impl &d,
   }
 
   if (req.command == "show_config") {
-    r.data = EncodeKv(d.running);
+    if (req.args.empty()) {
+      r.data = EncodeKv(d.running);
+      return r;
+    }
+    // Filter by prefix. `show config interfaces` matches every path
+    // starting with "interfaces" plus the exact leaf match.
+    const auto &prefix = req.args[0];
+    std::unordered_map<std::string, std::string> filtered;
+    for (const auto &[k, v] : d.running) {
+      if (k == prefix || k.rfind(prefix + ".", 0) == 0) {
+        filtered.emplace(k, v);
+      }
+    }
+    r.data = EncodeKv(filtered);
     return r;
   }
 

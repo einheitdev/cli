@@ -36,7 +36,10 @@ auto WithArg(CommandSpec s, std::string name, std::string help,
 auto RegisterGlobals(CommandTree &tree)
     -> std::expected<void, Error<CommandTreeError>> {
   const CommandSpec globals[] = {
-      Make("show config", "show_config", "Show running configuration"),
+      WithArg(Make("show config", "show_config",
+                   "Show running configuration (optional prefix)"),
+              "prefix", "Filter to paths under this prefix",
+              /*required=*/false),
       Make("show commits", "show_commits", "List commit history"),
       WithArg(Make("show commit", "show_commit",
                    "Show a single commit by id"),

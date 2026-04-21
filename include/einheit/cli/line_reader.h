@@ -29,7 +29,23 @@ using CompletionFn = std::function<std::vector<std::string>(
     const std::vector<std::string> &preceding,
     const std::string &partial)>;
 
-/// Abstract reader. Owns prompt + history + completion behaviour.
+/// One line of inline help: a candidate next token and an optional
+/// one-line description. `help` may be empty.
+struct HelpCandidate {
+  std::string name;
+  std::string help;
+};
+
+/// Called when the user presses `?` at any point in the line.
+/// Returns the set of candidate next tokens (with help) for the
+/// current cursor position. Unlike CompletionFn it includes help
+/// strings so readers can render Junos-style inline help.
+using HelpFn = std::function<std::vector<HelpCandidate>(
+    const std::vector<std::string> &preceding,
+    const std::string &partial)>;
+
+/// Abstract reader. Owns prompt + history + completion + help
+/// behaviour.
 class LineReader {
  public:
   virtual ~LineReader() = default;
@@ -44,6 +60,10 @@ class LineReader {
 
   /// Install or replace the tab-completion callback.
   virtual auto SetCompletion(CompletionFn fn) -> void = 0;
+
+  /// Install the `?` inline-help callback. No-op for readers that
+  /// can't bind individual keys.
+  virtual auto SetHelp(HelpFn fn) -> void = 0;
 };
 
 /// Construct the best available line reader. Prefers readline when

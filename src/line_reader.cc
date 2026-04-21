@@ -5,8 +5,11 @@
 
 #include "einheit/cli/line_reader.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <optional>
 #include <sstream>
@@ -29,7 +32,7 @@ auto Tokenize(const std::string &line) -> std::vector<std::string> {
   return out;
 }
 
-// Fallback: std::getline. No line editing, no completion.
+// Fallback: std::getline. No line editing, no completion, no help.
 class StdinReader : public LineReader {
  public:
   auto ReadLine(const std::string &prompt)
@@ -41,6 +44,7 @@ class StdinReader : public LineReader {
   }
   auto AddHistory(const std::string & /*line*/) -> void override {}
   auto SetCompletion(CompletionFn /*fn*/) -> void override {}
+  auto SetHelp(HelpFn /*fn*/) -> void override {}
 };
 
 #ifdef EINHEIT_HAVE_READLINE
@@ -52,6 +56,7 @@ class ReadlineReader : public LineReader {
  public:
   ReadlineReader() {
     rl_attempted_completion_function = &ReadlineReader::Attempt;
+    rl_bind_key('?', &ReadlineReader::ShowHelpKey);
     Active() = this;
   }
   ~ReadlineReader() override {
@@ -73,6 +78,10 @@ class ReadlineReader : public LineReader {
 
   auto SetCompletion(CompletionFn fn) -> void override {
     fn_ = std::move(fn);
+  }
+
+  auto SetHelp(HelpFn fn) -> void override {
+    help_fn_ = std::move(fn);
   }
 
  private:
@@ -108,7 +117,53 @@ class ReadlineReader : public LineReader {
     return result;
   }
 
+  // Invoked when the user presses `?` anywhere in the line. Splits
+  // rl_line_buffer around the cursor, asks the HelpFn, prints the
+  // candidates with their help text on a fresh line, then redraws
+  // the prompt + current input so the user can keep typing.
+  static auto ShowHelpKey(int /*count*/, int /*key*/) -> int {
+    auto *self = Active();
+    if (!self || !self->help_fn_) return 0;
+
+    const std::string before(rl_line_buffer,
+                             rl_line_buffer + rl_point);
+    std::vector<std::string> preceding;
+    std::string partial;
+    {
+      std::istringstream iss(before);
+      std::string tok;
+      while (iss >> tok) preceding.push_back(tok);
+      // If the buffer ends in a space, treat the last token as
+      // "accepted" (no partial); otherwise it's the partial.
+      if (!before.empty() && !std::isspace(
+                                 static_cast<unsigned char>(
+                                     before.back())) &&
+          !preceding.empty()) {
+        partial = preceding.back();
+        preceding.pop_back();
+      }
+    }
+    auto candidates = self->help_fn_(preceding, partial);
+
+    rl_crlf();
+    if (candidates.empty()) {
+      std::cout << "  (no candidates)\n";
+    } else {
+      std::size_t w = 4;
+      for (const auto &c : candidates) {
+        w = std::max(w, c.name.size());
+      }
+      for (const auto &c : candidates) {
+        std::cout << "  " << std::left << std::setw(static_cast<int>(w))
+                  << c.name << "   " << c.help << '\n';
+      }
+    }
+    rl_forced_update_display();
+    return 0;
+  }
+
   CompletionFn fn_;
+  HelpFn help_fn_;
 };
 
 #endif  // EINHEIT_HAVE_READLINE

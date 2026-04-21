@@ -304,6 +304,49 @@ auto RenderSet(const Table &t, std::ostream &out) -> void {
 
 }  // namespace
 
+auto RenderError(const std::string &code, const std::string &message,
+                 const std::string &hint, Renderer &renderer)
+    -> void {
+  using namespace ftxui;
+  const auto &caps = renderer.Caps();
+  const bool colorful =
+      !caps.force_plain && caps.colors != ColorDepth::None;
+
+  if (!caps.unicode) {
+    renderer.Out() << std::format("[FAIL] {}: {}\n", code, message);
+    if (!hint.empty()) {
+      renderer.Out() << std::format("       hint: {}\n", hint);
+    }
+    return;
+  }
+
+  std::vector<Element> lines;
+  lines.push_back(hbox({
+      text("error  ") | bold |
+          (colorful ? color(Color::RedLight) : nothing),
+      text(code) | bold,
+  }));
+  lines.push_back(text(message) |
+                  (colorful ? color(Color::RedLight) : nothing));
+  if (!hint.empty()) {
+    lines.push_back(text(""));
+    lines.push_back(
+        hbox({text("hint: ") | bold |
+                  (colorful ? color(Color::YellowLight) : nothing),
+              text(hint) |
+                  (colorful ? color(Color::YellowLight) : nothing)}));
+  }
+
+  Element body = vbox(std::move(lines));
+  Element framed =
+      body | borderRounded |
+      (colorful ? color(Color::RedLight) : nothing);
+  auto screen = Screen::Create(Dimension::Fit(framed),
+                               Dimension::Fit(framed));
+  Render(screen, framed);
+  renderer.Out() << screen.ToString() << '\n';
+}
+
 auto RenderFormatted(const Table &t, Renderer &renderer) -> void {
   switch (renderer.Format()) {
     case OutputFormat::Json:

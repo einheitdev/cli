@@ -54,10 +54,30 @@ auto NewRequestId() -> std::string {
   return std::format("{:016x}{:016x}", rng(), rng());
 }
 
-auto PromptFor(const ProductMetadata &meta, const Session &session)
+auto PromptFor(const Shell &s, const ProductMetadata &meta)
     -> std::string {
-  return std::format("{}{} ", meta.prompt,
-                     session.in_configure ? '#' : '>');
+  const bool color_ok =
+      !s.caps.force_plain &&
+      s.caps.colors != render::ColorDepth::None;
+  const std::string host = s.target_name.empty()
+                               ? meta.prompt
+                               : s.target_name;
+  const std::string prefix =
+      s.caller.user.empty() ? host
+                             : std::format("{}@{}", s.caller.user,
+                                           host);
+  const char glyph = s.session.in_configure ? '#' : '>';
+  if (!color_ok) {
+    return std::format("{}{} ", prefix, glyph);
+  }
+  // dim the user@host, colour the mode glyph (yellow in configure,
+  // cyan in operational) so mode is always visually obvious.
+  constexpr const char *kReset = "\x1b[0m";
+  constexpr const char *kDim = "\x1b[90m";
+  const char *mode_color =
+      s.session.in_configure ? "\x1b[33m" : "\x1b[36m";
+  return std::format("{}{}{} {}{}{} ", kDim, prefix, kReset,
+                     mode_color, glyph, kReset);
 }
 
 auto BuildRequest(const ParsedCommand &parsed, const Shell &s)
@@ -94,7 +114,26 @@ auto Dispatch(Shell &s, const ParsedCommand &parsed)
   if (spec.wire_command.empty()) {
     out.handled_locally = true;
     if (spec.path == "exit" || spec.path == "quit") {
-      out.exit_shell = true;
+      // Junos-style two-level exit: inside configure we drop the
+      // candidate session and return to operational; the second
+      // exit from operational closes the shell.
+      if (s.session.in_configure) {
+        // Ask the daemon to drop the candidate server-side too.
+        ParsedCommand rb;
+        CommandSpec rb_spec;
+        rb_spec.path = "rollback candidate";
+        rb_spec.wire_command = "rollback";
+        rb_spec.requires_session = true;
+        rb_spec.role = RoleGate::AdminOnly;
+        rb.spec = &rb_spec;
+        rb.args = {"candidate"};
+        auto req = BuildRequest(rb, s);
+        using namespace std::chrono_literals;
+        (void)s.tx->SendRequest(req, 2s);
+        ClearSession(s.session);
+      } else {
+        out.exit_shell = true;
+      }
     }
     return out;
   }
@@ -180,9 +219,43 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
         return SuggestCompletions(s.tree, s.adapter->GetSchema(),
                                   preceding, partial);
       });
+  reader->SetHelp(
+      [&](const std::vector<std::string> &preceding,
+          const std::string &partial)
+          -> std::vector<HelpCandidate> {
+        auto names = SuggestCompletions(
+            s.tree, s.adapter->GetSchema(), preceding, partial);
+        std::vector<HelpCandidate> out;
+        out.reserve(names.size());
+        for (const auto &name : names) {
+          HelpCandidate c;
+          c.name = name;
+          std::string full_path;
+          for (const auto &p : preceding) {
+            if (!full_path.empty()) full_path += ' ';
+            full_path += p;
+          }
+          if (!full_path.empty()) full_path += ' ';
+          full_path += name;
+          auto it = s.tree.by_path.find(full_path);
+          if (it != s.tree.by_path.end()) {
+            c.help = it->second.help;
+          } else {
+            for (const auto &[path, spec] : s.tree.by_path) {
+              if (path.rfind(full_path + " ", 0) == 0) {
+                c.help =
+                    std::format("(more under `{}`)", full_path);
+                break;
+              }
+            }
+          }
+          out.push_back(std::move(c));
+        }
+        return out;
+      });
 
   while (true) {
-    auto raw = reader->ReadLine(PromptFor(meta, s.session));
+    auto raw = reader->ReadLine(PromptFor(s, meta));
     if (!raw) break;
     const auto line = Expand(aliases, *raw);
     if (line.empty()) continue;
@@ -191,7 +264,8 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
     auto tokens = Tokenize(line);
     auto parsed = Parse(s.tree, tokens, s.caller.role);
     if (!parsed) {
-      std::cerr << "error: " << parsed.error().message << '\n';
+      render::RenderError("parse", parsed.error().message, "",
+                          renderer);
       continue;
     }
 
@@ -201,7 +275,8 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
       (void)Append(history, line);
     }
     if (!result) {
-      std::cerr << "dispatch: " << result.error().message << '\n';
+      render::RenderError("dispatch", result.error().message, "",
+                          renderer);
       continue;
     }
     if (result->exit_shell) break;

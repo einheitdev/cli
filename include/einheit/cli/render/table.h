@@ -97,6 +97,18 @@ class Renderer;
 /// @param renderer Renderer carrying out stream + caps + format.
 auto RenderFormatted(const Table &t, Renderer &renderer) -> void;
 
+/// Render a daemon error as a bordered red FTXUI box showing code +
+/// message + optional hint. Used by every adapter's RenderResponse
+/// when Response::error is populated; keeps error styling consistent
+/// across products.
+/// @param code Machine-readable error code.
+/// @param message Human-readable message.
+/// @param hint Optional hint text; empty string omits the line.
+/// @param renderer Destination.
+auto RenderError(const std::string &code, const std::string &message,
+                 const std::string &hint, Renderer &renderer)
+    -> void;
+
 /// Output serialisation the user asked for. Human-table is the
 /// default; JSON / YAML / set-syntax are opt-in via --format.
 enum class OutputFormat {
