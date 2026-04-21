@@ -75,13 +75,19 @@ class ReplxxReader : public LineReader {
             -> replxx::Replxx::hints_t {
           color = replxx::Replxx::Color::GRAY;
           if (!help_fn_) return {};
+          // Empty buffer — don't hint. Otherwise the completion
+          // set expands to every registered verb and we'd pick
+          // an arbitrary one, which reads as noise.
+          if (ctx.empty() && len == 0) return {};
           const auto preceding = Tokenize(std::string(
               ctx.data(), ctx.data() + ctx.size() - len));
           const std::string partial(
               ctx.data() + ctx.size() - len, len);
+          // No partial at the cursor (trailing whitespace) —
+          // user isn't asking for a specific completion yet.
+          if (partial.empty()) return {};
           auto candidates = help_fn_(preceding, partial);
           if (candidates.empty()) return {};
-          // Show the first candidate's name as a ghost hint.
           replxx::Replxx::hints_t out;
           out.emplace_back(candidates.front().name.c_str());
           return out;
