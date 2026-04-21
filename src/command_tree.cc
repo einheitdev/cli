@@ -49,23 +49,69 @@ auto Parse(const CommandTree &tree,
            const std::vector<std::string> &tokens,
            RoleGate caller_role)
     -> std::expected<ParsedCommand, Error<CommandTreeError>> {
-  // Longest-prefix match against the path token set.
-  const CommandSpec *best = nullptr;
-  std::size_t best_len = 0;
+  // Match every registered path against the input, remembering both
+  // exact and prefix-only hits. At the longest length, an exact
+  // match wins outright; otherwise we require exactly one prefix
+  // candidate (Junos-style unambiguous abbreviation). Ambiguous
+  // prefixes surface as an "ambiguous" error listing alternatives.
+  struct Match {
+    const CommandSpec *spec;
+    std::size_t len;
+    bool all_exact;
+  };
+  std::vector<Match> matches;
   for (const auto &[path, spec] : tree.by_path) {
     std::istringstream iss(path);
     std::vector<std::string> parts;
     for (std::string p; iss >> p;) parts.push_back(std::move(p));
     if (parts.size() > tokens.size()) continue;
-    bool match = true;
+    bool ok = true;
+    bool all_exact = true;
     for (std::size_t i = 0; i < parts.size(); ++i) {
-      if (parts[i] != tokens[i]) { match = false; break; }
+      if (parts[i] == tokens[i]) continue;
+      if (parts[i].size() >= tokens[i].size() &&
+          parts[i].compare(0, tokens[i].size(), tokens[i]) == 0) {
+        all_exact = false;
+        continue;
+      }
+      ok = false;
+      break;
     }
-    if (match && parts.size() > best_len) {
-      best = &spec;
-      best_len = parts.size();
+    if (ok) matches.push_back({&spec, parts.size(), all_exact});
+  }
+
+  const CommandSpec *best = nullptr;
+  std::size_t best_len = 0;
+  if (!matches.empty()) {
+    std::size_t max_len = 0;
+    for (const auto &m : matches) max_len = std::max(max_len, m.len);
+
+    // At the longest length, find the exact hit or a unique prefix.
+    const CommandSpec *exact = nullptr;
+    std::vector<const CommandSpec *> prefix_only;
+    for (const auto &m : matches) {
+      if (m.len != max_len) continue;
+      if (m.all_exact && !exact) exact = m.spec;
+      if (!m.all_exact) prefix_only.push_back(m.spec);
+    }
+    if (exact) {
+      best = exact;
+      best_len = max_len;
+    } else if (prefix_only.size() == 1) {
+      best = prefix_only.front();
+      best_len = max_len;
+    } else if (prefix_only.size() > 1) {
+      std::string options;
+      for (std::size_t i = 0; i < prefix_only.size(); ++i) {
+        if (i > 0) options += ", ";
+        options += prefix_only[i]->path;
+      }
+      return std::unexpected(MakeError(
+          CommandTreeError::UnknownCommand,
+          std::format("ambiguous — did you mean: {}", options)));
     }
   }
+
   if (!best) {
     // Fuzzy-match the first token against known verbs for a hint.
     std::string message = "no matching command";

@@ -41,6 +41,83 @@ TEST(CommandTree, UnknownCommandSuggestsDidYouMean) {
             std::string::npos);
 }
 
+TEST(CommandTree, PrefixExpandsUniqueVerb) {
+  CommandTree tree;
+  CommandSpec configure;
+  configure.path = "configure";
+  configure.wire_command = "configure";
+  CommandSpec commit;
+  commit.path = "commit";
+  commit.wire_command = "commit";
+  ASSERT_TRUE(Register(tree, configure).has_value());
+  ASSERT_TRUE(Register(tree, commit).has_value());
+
+  // "config" is a unique prefix of "configure".
+  auto parsed = Parse(tree, {"config"}, RoleGate::AnyAuthenticated);
+  ASSERT_TRUE(parsed.has_value()) << parsed.error().message;
+  EXPECT_EQ(parsed->spec->path, "configure");
+}
+
+TEST(CommandTree, PrefixExpandsInsideSubcommand) {
+  CommandTree tree;
+  CommandSpec show_config;
+  show_config.path = "show config";
+  show_config.wire_command = "show_config";
+  CommandSpec show_commits;
+  show_commits.path = "show commits";
+  show_commits.wire_command = "show_commits";
+  ASSERT_TRUE(Register(tree, show_config).has_value());
+  ASSERT_TRUE(Register(tree, show_commits).has_value());
+
+  auto parsed = Parse(tree, {"show", "conf"},
+                      RoleGate::AnyAuthenticated);
+  ASSERT_TRUE(parsed.has_value()) << parsed.error().message;
+  EXPECT_EQ(parsed->spec->path, "show config");
+}
+
+TEST(CommandTree, AmbiguousPrefixReportsOptions) {
+  CommandTree tree;
+  CommandSpec commit;
+  commit.path = "commit";
+  commit.wire_command = "commit";
+  CommandSpec commits;
+  commits.path = "show commits";
+  commits.wire_command = "show_commits";
+  ASSERT_TRUE(Register(tree, commit).has_value());
+  ASSERT_TRUE(Register(tree, commits).has_value());
+
+  CommandSpec configure;
+  configure.path = "configure";
+  configure.wire_command = "configure";
+  ASSERT_TRUE(Register(tree, configure).has_value());
+
+  // "co" matches both `commit` and `configure` at length 1.
+  auto parsed = Parse(tree, {"co"}, RoleGate::AnyAuthenticated);
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().message.find("ambiguous"),
+            std::string::npos);
+  EXPECT_NE(parsed.error().message.find("commit"),
+            std::string::npos);
+  EXPECT_NE(parsed.error().message.find("configure"),
+            std::string::npos);
+}
+
+TEST(CommandTree, ExactMatchWinsOverPrefix) {
+  CommandTree tree;
+  CommandSpec commit;
+  commit.path = "commit";
+  commit.wire_command = "commit";
+  CommandSpec commits;
+  commits.path = "show commits";
+  commits.wire_command = "show_commits";
+  ASSERT_TRUE(Register(tree, commit).has_value());
+  ASSERT_TRUE(Register(tree, commits).has_value());
+
+  auto parsed = Parse(tree, {"commit"}, RoleGate::AnyAuthenticated);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->spec->path, "commit");
+}
+
 TEST(CommandTree, RoleGate) {
   CommandTree tree;
   CommandSpec configure;
