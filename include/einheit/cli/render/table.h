@@ -97,6 +97,14 @@ class Renderer;
 /// @param renderer Renderer carrying out stream + caps + format.
 auto RenderFormatted(const Table &t, Renderer &renderer) -> void;
 
+/// Emit the ANSI sequence that clears the terminal and homes the
+/// cursor. No-op when caps can't handle ANSI. Used by watch loops
+/// to redraw in place instead of appending.
+/// @param out Destination stream.
+/// @param caps Terminal capabilities.
+auto ClearScreen(std::ostream &out, const TerminalCaps &caps)
+    -> void;
+
 /// Render a daemon error as a bordered red FTXUI box showing code +
 /// message + optional hint. Used by every adapter's RenderResponse
 /// when Response::error is populated; keeps error styling consistent

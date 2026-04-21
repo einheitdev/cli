@@ -1,0 +1,16 @@
+# Example theme for einheit-cli.
+#
+# Copy to ~/.einheit/theme.yaml. Colour names are FTXUI enum values
+# (GreenLight, Green, Yellow, YellowLight, Red, RedLight, Cyan,
+# CyanLight, Blue, BlueLight, Magenta, White, Black, GrayLight,
+# GrayDark, Default). Unset keys keep their defaults.
+
+good: GreenLight        # healthy, committed, active values
+warn: YellowLight       # degraded, connecting, about to change
+bad:  RedLight          # failed, denied, dropped
+dim:  GrayDark          # stale, placeholder, muted context
+emphasis: White         # headers, important values
+info: CyanLight         # labels, neutral highlights
+
+border: GrayLight       # box-drawing colour
+accent: CyanLight       # logo + prompt glyph

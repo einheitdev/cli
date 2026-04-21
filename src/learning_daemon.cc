@@ -222,9 +222,27 @@ auto HandleRequest(LearningDaemon::Impl &d,
           std::format("no such commit: {}", id), ""};
       return r;
     }
+    // Diff against the previous commit: `+key=val` added,
+    // `~key=val (was X)` changed, `=key=val` unchanged, `-key=val`
+    // removed. Adapter colours these lines green/yellow/red.
+    const auto &cur = d.commits[id - 1];
+    std::unordered_map<std::string, std::string> prev;
+    if (id >= 2) prev = d.commits[id - 2];
     std::string body = std::format("commit_id={}\n", id);
-    for (const auto &[k, v] : d.commits[id - 1]) {
-      body += std::format("{}={}\n", k, v);
+    for (const auto &[k, v] : cur) {
+      auto it = prev.find(k);
+      if (it == prev.end()) {
+        body += std::format("+{}={}\n", k, v);
+      } else if (it->second != v) {
+        body += std::format("~{}={} (was {})\n", k, v, it->second);
+      } else {
+        body += std::format("={}={}\n", k, v);
+      }
+    }
+    for (const auto &[k, v] : prev) {
+      if (!cur.contains(k)) {
+        body += std::format("-{}={}\n", k, v);
+      }
     }
     r.data = EncodeString(body);
     return r;

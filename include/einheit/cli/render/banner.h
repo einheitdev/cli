@@ -8,6 +8,7 @@
 #define INCLUDE_EINHEIT_CLI_RENDER_BANNER_H_
 
 #include <string>
+#include <vector>
 
 #include "einheit/cli/render/terminal_caps.h"
 
@@ -28,7 +29,20 @@ struct BannerInfo {
   /// Optional target name from `--target` / `einheit use`. Shown
   /// when non-empty.
   std::string target_name;
+  /// Optional "tip of the day" line rendered dimmed under the info
+  /// column. Empty means no tip.
+  std::string tip;
 };
+
+/// Short hints rotated under the banner. Pure data so tests + other
+/// callers can inspect or override the list.
+/// @returns A curated list of one-line tips.
+auto DefaultTips() -> std::vector<std::string>;
+
+/// Pick a tip pseudo-randomly, seeded by the current time so each
+/// run shows a different one but a single session is stable.
+/// @returns One tip line from DefaultTips().
+auto PickTip() -> std::string;
 
 /// Render the banner to a string. Output includes a trailing
 /// newline. Uses unicode box characters + ANSI colour when caps

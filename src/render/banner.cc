@@ -5,7 +5,9 @@
 #include "einheit/cli/render/banner.h"
 
 #include <cctype>
+#include <chrono>
 #include <format>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -61,6 +63,11 @@ auto UnicodeBanner(const BannerInfo &info, std::uint16_t width)
         text("learning mode — state is in-memory") |
         color(Color::Yellow) | bold);
   }
+  if (!info.tip.empty()) {
+    info_lines.push_back(
+        text(std::format("tip: {}", info.tip)) |
+        color(Color::GrayLight));
+  }
 
   Element logo_col =
       vbox(std::move(logo_lines)) | size(WIDTH, EQUAL, kLogoWidth);
@@ -109,6 +116,31 @@ auto Banner(const BannerInfo &info, const TerminalCaps &caps)
     return AsciiBanner(info);
   }
   return UnicodeBanner(info, caps.width);
+}
+
+auto DefaultTips() -> std::vector<std::string> {
+  return {
+      "press `?` mid-line for context help",
+      "`show schema` lists every configurable path",
+      "`show config interfaces` narrows a dump to a subtree",
+      "`!!` reruns your last command",
+      "`history` shows what you ran earlier this session",
+      "tab completes verbs and schema paths",
+      "YAML aliases at ~/.einheit/aliases.yaml — share with `include:`",
+      "`commit confirmed 10` auto-rolls back after 10s if no follow-up",
+      "`--format json` pipes cleanly into jq",
+      "`exit` in configure drops back to operational",
+  };
+}
+
+auto PickTip() -> std::string {
+  auto tips = DefaultTips();
+  if (tips.empty()) return {};
+  const auto seed =
+      std::chrono::system_clock::now().time_since_epoch().count();
+  std::mt19937_64 rng(static_cast<std::uint64_t>(seed));
+  std::uniform_int_distribution<std::size_t> pick(0, tips.size() - 1);
+  return tips[pick(rng)];
 }
 
 }  // namespace einheit::cli::render

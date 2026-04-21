@@ -35,6 +35,7 @@ einheit_add_test(test_workstation_state)
 einheit_add_test(test_shell_escape)
 einheit_add_test(test_format_output)
 einheit_add_test(test_learning_daemon)
+einheit_add_test(test_theme)
 
 # Adapter contract test links the shipped example adapter to assert
 # the template stays well-formed.

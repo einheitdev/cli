@@ -252,24 +252,43 @@ auto JsonEscape(const std::string &s) -> std::string {
   return out;
 }
 
-auto RenderJson(const Table &t, std::ostream &out) -> void {
-  out << '[';
+auto RenderJson(const Table &t, std::ostream &out, bool colorize)
+    -> void {
+  constexpr const char *kKey = "\x1b[36m";
+  constexpr const char *kStr = "\x1b[32m";
+  constexpr const char *kPunct = "\x1b[90m";
+  constexpr const char *kReset = "\x1b[0m";
+  const char *ck = colorize ? kKey : "";
+  const char *cs = colorize ? kStr : "";
+  const char *cp = colorize ? kPunct : "";
+  const char *cr = colorize ? kReset : "";
+
+  out << cp << '[' << cr;
   for (std::size_t r = 0; r < t.rows.size(); ++r) {
-    if (r > 0) out << ',';
-    out << '{';
+    if (r > 0) out << cp << ',' << cr;
+    out << cp << '{' << cr;
     for (std::size_t c = 0; c < t.columns.size(); ++c) {
-      if (c > 0) out << ',';
+      if (c > 0) out << cp << ',' << cr;
       const std::string &cell_text =
           (c < t.rows[r].size()) ? t.rows[r][c].text : std::string();
-      out << '"' << JsonEscape(t.columns[c].header) << "\":\""
-          << JsonEscape(cell_text) << '"';
+      out << ck << '"' << JsonEscape(t.columns[c].header)
+          << '"' << cr << cp << ':' << cr << cs << '"'
+          << JsonEscape(cell_text) << '"' << cr;
     }
-    out << '}';
+    out << cp << '}' << cr;
   }
-  out << "]\n";
+  out << cp << ']' << cr << "\n";
 }
 
-auto RenderYaml(const Table &t, std::ostream &out) -> void {
+auto RenderYaml(const Table &t, std::ostream &out, bool colorize)
+    -> void {
+  constexpr const char *kKey = "\x1b[36m";
+  constexpr const char *kDash = "\x1b[90m";
+  constexpr const char *kReset = "\x1b[0m";
+  const char *ck = colorize ? kKey : "";
+  const char *cd = colorize ? kDash : "";
+  const char *cr = colorize ? kReset : "";
+
   if (t.rows.empty()) {
     out << "[]\n";
     return;
@@ -279,8 +298,9 @@ auto RenderYaml(const Table &t, std::ostream &out) -> void {
     for (std::size_t c = 0; c < t.columns.size(); ++c) {
       const std::string &cell_text =
           (c < row.size()) ? row[c].text : std::string();
-      out << (first_field ? "- " : "  ")
-          << t.columns[c].header << ": " << cell_text << '\n';
+      out << (first_field ? (std::string(cd) + "- " + cr) : "  ")
+          << ck << t.columns[c].header << cr << ": " << cell_text
+          << '\n';
       first_field = false;
     }
   }
@@ -303,6 +323,12 @@ auto RenderSet(const Table &t, std::ostream &out) -> void {
 }
 
 }  // namespace
+
+auto ClearScreen(std::ostream &out, const TerminalCaps &caps)
+    -> void {
+  if (caps.force_plain || caps.colors == ColorDepth::None) return;
+  out << "\x1b[2J\x1b[H";
+}
 
 auto RenderError(const std::string &code, const std::string &message,
                  const std::string &hint, Renderer &renderer)
@@ -349,12 +375,18 @@ auto RenderError(const std::string &code, const std::string &message,
 
 auto RenderFormatted(const Table &t, Renderer &renderer) -> void {
   switch (renderer.Format()) {
-    case OutputFormat::Json:
-      RenderJson(t, renderer.Out());
+    case OutputFormat::Json: {
+      const auto &c = renderer.Caps();
+      RenderJson(t, renderer.Out(),
+                 !c.force_plain && c.colors != ColorDepth::None);
       return;
-    case OutputFormat::Yaml:
-      RenderYaml(t, renderer.Out());
+    }
+    case OutputFormat::Yaml: {
+      const auto &c = renderer.Caps();
+      RenderYaml(t, renderer.Out(),
+                 !c.force_plain && c.colors != ColorDepth::None);
       return;
+    }
     case OutputFormat::Set:
       RenderSet(t, renderer.Out());
       return;

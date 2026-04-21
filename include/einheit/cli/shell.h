@@ -7,6 +7,8 @@
 #ifndef INCLUDE_EINHEIT_CLI_SHELL_H_
 #define INCLUDE_EINHEIT_CLI_SHELL_H_
 
+#include <chrono>
+#include <cstddef>
 #include <expected>
 #include <memory>
 #include <optional>
@@ -54,6 +56,16 @@ struct Shell {
   bool learning_mode = false;
   /// Resolved target name when `--target` / `einheit use` is active.
   std::string target_name;
+
+  /// Running totals for the session summary printed on exit.
+  struct Stats {
+    std::size_t commands = 0;
+    std::size_t commits = 0;
+    std::size_t rollbacks = 0;
+    std::size_t errors = 0;
+    std::chrono::steady_clock::time_point start =
+        std::chrono::steady_clock::now();
+  } stats;
 };
 
 /// Result of dispatching one accepted command line. Exposed so tests

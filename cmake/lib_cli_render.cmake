@@ -5,6 +5,9 @@ add_library(cli_render_obj OBJECT
   src/render/table.cc
   src/render/sparkline.cc
   src/render/banner.cc
+  src/render/confirm.cc
+  src/render/pager.cc
+  src/render/theme.cc
 )
 
 target_include_directories(cli_render_obj
@@ -17,6 +20,7 @@ target_link_libraries(cli_render_obj
   PUBLIC
     ftxui::screen
     ftxui::dom
+    yaml-cpp::yaml-cpp
 )
 
 add_library(cli_render STATIC
@@ -33,4 +37,5 @@ target_link_libraries(cli_render
   PUBLIC
     ftxui::screen
     ftxui::dom
+    yaml-cpp::yaml-cpp
 )

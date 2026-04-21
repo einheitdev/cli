@@ -21,6 +21,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef EINHEIT_HAVE_READLINE
+#include <readline/history.h>
+#endif
+
 #include "einheit/cli/aliases.h"
 #include "einheit/cli/audit.h"
 #include "einheit/cli/auth.h"
@@ -28,6 +32,8 @@
 #include "einheit/cli/line_reader.h"
 #include "einheit/cli/protocol/envelope.h"
 #include "einheit/cli/render/banner.h"
+#include "einheit/cli/render/confirm.h"
+#include "einheit/cli/render/pager.h"
 #include "einheit/cli/render/table.h"
 #include "einheit/cli/schema.h"
 
@@ -52,6 +58,45 @@ auto NewRequestId() -> std::string {
   // gets us uniqueness within a session.
   static thread_local std::mt19937_64 rng{std::random_device{}()};
   return std::format("{:016x}{:016x}", rng(), rng());
+}
+
+auto StatusBar(const Shell &s) -> std::string {
+  const bool color_ok =
+      !s.caps.force_plain &&
+      s.caps.colors != render::ColorDepth::None;
+  constexpr const char *kReset = "\x1b[0m";
+  constexpr const char *kDim = "\x1b[90m";
+  constexpr const char *kGreen = "\x1b[32m";
+  constexpr const char *kYellow = "\x1b[33m";
+  constexpr const char *kRed = "\x1b[31m";
+  const auto c = [&](const char *ansi, const std::string &t) {
+    return color_ok ? std::format("{}{}{}", ansi, t, kReset) : t;
+  };
+
+  std::vector<std::string> chips;
+  chips.push_back(
+      c(kDim, std::format("● {} cmds", s.stats.commands)));
+  if (s.stats.commits > 0) {
+    chips.push_back(
+        c(kGreen, std::format("✓ {} commits", s.stats.commits)));
+  }
+  if (s.stats.errors > 0) {
+    chips.push_back(
+        c(kRed, std::format("✗ {} errors", s.stats.errors)));
+  }
+  if (s.session.in_configure) {
+    chips.push_back(c(kYellow, "◆ configure"));
+  }
+  if (s.session.confirm_deadline) {
+    chips.push_back(c(kYellow, "⏱ commit-confirm pending"));
+  }
+
+  std::string out;
+  for (std::size_t i = 0; i < chips.size(); ++i) {
+    if (i > 0) out += c(kDim, " · ");
+    out += chips[i];
+  }
+  return out.empty() ? std::string{} : out + "\n";
 }
 
 auto PromptFor(const Shell &s, const ProductMetadata &meta)
@@ -194,7 +239,30 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
   binfo.version = meta.version;
   binfo.learning_mode = s.learning_mode;
   binfo.target_name = s.target_name;
+  binfo.tip = render::PickTip();
   std::cout << render::Banner(binfo, s.caps);
+
+  // Mini tutorial in learning mode — gives first-time users a
+  // concrete path to try.
+  if (s.learning_mode) {
+    const bool colorful =
+        !s.caps.force_plain &&
+        s.caps.colors != render::ColorDepth::None;
+    constexpr const char *kDim = "\x1b[90m";
+    constexpr const char *kCyan = "\x1b[36m";
+    constexpr const char *kReset = "\x1b[0m";
+    const auto c = [&](const char *ansi, const std::string &t) {
+      return colorful ? std::format("{}{}{}", ansi, t, kReset) : t;
+    };
+    std::cout << c(kDim, "try:  ") << c(kCyan, "show schema")
+              << c(kDim, "  →  ") << c(kCyan, "configure")
+              << c(kDim, "  →  ")
+              << c(kCyan, "set hostname demo")
+              << c(kDim, "  →  ") << c(kCyan, "commit")
+              << "\n\n";
+  }
+
+  s.stats.start = std::chrono::steady_clock::now();
 
   render::Renderer renderer(std::cout, s.caps);
 
@@ -255,26 +323,88 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
       });
 
   while (true) {
-    auto raw = reader->ReadLine(PromptFor(s, meta));
+    const auto status = StatusBar(s);
+    auto raw = reader->ReadLine(
+        std::format("{}{}", status, PromptFor(s, meta)));
     if (!raw) break;
-    const auto line = Expand(aliases, *raw);
+
+    // History expansion: `!!` reruns the last entry, `!N` reruns
+    // entry N, `!pfx` reruns the last matching prefix. Failure
+    // (e.g. no prior entry) falls back to the literal input.
+    std::string expanded = *raw;
+#ifdef EINHEIT_HAVE_READLINE
+    {
+      char *result = nullptr;
+      const int rc =
+          ::history_expand(expanded.data(), &result);
+      if (rc >= 0 && result) {
+        expanded = result;
+        if (rc == 1) {
+          // Show the expanded form — matches bash behaviour.
+          std::cout << expanded << '\n';
+        }
+      }
+      if (result) std::free(result);
+    }
+#endif
+
+    const auto line = Expand(aliases, expanded);
     if (line.empty()) continue;
     reader->AddHistory(line);
 
     auto tokens = Tokenize(line);
     auto parsed = Parse(s.tree, tokens, s.caller.role);
     if (!parsed) {
-      render::RenderError("parse", parsed.error().message, "",
-                          renderer);
+      s.stats.errors += 1;
+      // Split "message — did you mean 'X'?" into message + hint so
+      // the suggestion lands on the yellow hint line of the box.
+      std::string msg = parsed.error().message;
+      std::string hint;
+      if (const auto pos = msg.find(" — ");
+          pos != std::string::npos) {
+        hint = msg.substr(pos + 5);  // skip " — "
+        msg = msg.substr(0, pos);
+      }
+      render::RenderError("parse", msg, hint, renderer);
       continue;
+    }
+
+    // Destructive verbs get a yellow confirmation prompt.
+    if (parsed->spec->path == "rollback previous" ||
+        parsed->spec->path == "shell" ||
+        parsed->spec->path == "delete") {
+      const auto msg =
+          std::format("about to run `{}` — this cannot be undone.",
+                      parsed->spec->path);
+      if (!render::ConfirmPrompt(msg, std::cout, std::cin,
+                                 s.caps)) {
+        std::cout << "  cancelled.\n";
+        continue;
+      }
     }
 
     auto result = Dispatch(s, *parsed);
     if (result) {
-      // Record successful parse+dispatch regardless of wire outcome.
       (void)Append(history, line);
+      s.stats.commands += 1;
+      if (parsed->spec->wire_command == "commit" &&
+          result->response &&
+          result->response->status == protocol::ResponseStatus::Ok) {
+        s.stats.commits += 1;
+      } else if (parsed->spec->wire_command == "rollback" &&
+                 result->response &&
+                 result->response->status ==
+                     protocol::ResponseStatus::Ok) {
+        s.stats.rollbacks += 1;
+      }
+      if (result->response &&
+          result->response->status ==
+              protocol::ResponseStatus::Error) {
+        s.stats.errors += 1;
+      }
     }
     if (!result) {
+      s.stats.errors += 1;
       render::RenderError("dispatch", result.error().message, "",
                           renderer);
       continue;
@@ -307,13 +437,53 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
       continue;
     }
     if (result->response) {
+      // Buffer the adapter's output so we can decide whether to
+      // page it based on line count vs terminal height.
+      std::ostringstream buf;
+      render::Renderer buffered(buf, s.caps, renderer.Format());
       try {
         s.adapter->RenderResponse(*parsed->spec, *result->response,
-                                  renderer);
+                                  buffered);
       } catch (const std::exception &e) {
         std::cerr << "render: " << e.what() << '\n';
       }
+      render::Flush(buf.str(), s.caps);
     }
+  }
+
+  // Session-end summary.
+  {
+    const auto elapsed =
+        std::chrono::steady_clock::now() - s.stats.start;
+    const auto secs =
+        std::chrono::duration_cast<std::chrono::seconds>(elapsed)
+            .count();
+    render::Table t;
+    AddColumn(t, "session", render::Align::Left,
+              render::Priority::High);
+    AddColumn(t, "count", render::Align::Right,
+              render::Priority::High);
+    AddRow(t, {render::Cell{"commands",
+                            render::Semantic::Emphasis},
+               render::Cell{std::to_string(s.stats.commands)}});
+    AddRow(t, {render::Cell{"commits",
+                            render::Semantic::Emphasis},
+               render::Cell{std::to_string(s.stats.commits),
+                            render::Semantic::Good}});
+    AddRow(t, {render::Cell{"rollbacks",
+                            render::Semantic::Emphasis},
+               render::Cell{std::to_string(s.stats.rollbacks)}});
+    AddRow(t, {render::Cell{"errors",
+                            render::Semantic::Emphasis},
+               render::Cell{std::to_string(s.stats.errors),
+                            s.stats.errors > 0
+                                ? render::Semantic::Bad
+                                : render::Semantic::Dim}});
+    AddRow(t, {render::Cell{"duration",
+                            render::Semantic::Emphasis},
+               render::Cell{std::format("{}s", secs),
+                            render::Semantic::Dim}});
+    Render(t, std::cout, s.caps);
   }
   return {};
 }

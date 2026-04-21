@@ -152,25 +152,44 @@ class ExampleAdapter : public ProductAdapter {
     using einheit::cli::render::Semantic;
 
     if (response.error) {
-      einheit::cli::render::RenderError(
-          response.error->code, response.error->message,
-          response.error->hint, renderer);
+      // If the daemon packed a "did you mean" suggestion into the
+      // message (common for schema validation errors), split it out
+      // so the suggestion renders on the yellow hint line.
+      std::string msg = response.error->message;
+      std::string hint = response.error->hint;
+      if (hint.empty()) {
+        if (const auto pos = msg.find(" — ");
+            pos != std::string::npos) {
+          hint = msg.substr(pos + 5);
+          msg = msg.substr(0, pos);
+        }
+      }
+      einheit::cli::render::RenderError(response.error->code, msg,
+                                        hint, renderer);
       return;
     }
-
-    (void)cmd;
 
     if (response.data.empty()) {
-      einheit::cli::render::Table t;
-      AddColumn(t, "status", Align::Left, Priority::High);
-      AddRow(t, {Cell{"ok", Semantic::Good}});
-      RenderFormatted(t, renderer);
+      const auto &path = cmd.path;
+      if (path == "show config") {
+        renderer.Out()
+            << "  (no configuration yet — run `configure` then "
+               "`set`)\n";
+      } else if (path == "show commits") {
+        renderer.Out()
+            << "  (no commits yet — run `commit` to record one)\n";
+      } else {
+        einheit::cli::render::Table t;
+        AddColumn(t, "status", Align::Left, Priority::High);
+        AddRow(t, {Cell{"ok", Semantic::Good}});
+        RenderFormatted(t, renderer);
+      }
       return;
     }
 
-    // Parse the learning daemon's key=value lines into a two-column
-    // table. `value` inherits a semantic from the key name so
-    // commit_id → good, etc.
+    // Parse the learning daemon's key=value lines. `show_commit`
+    // prefixes each line with a diff marker (+/-/~/=); colour
+    // accordingly. Plain rows (no marker) are shown Emphasis/Default.
     einheit::cli::render::Table t;
     AddColumn(t, "field", Align::Left, Priority::High);
     AddColumn(t, "value", Align::Left, Priority::High);
@@ -181,8 +200,21 @@ class ExampleAdapter : public ProductAdapter {
     std::string line;
     while (std::getline(iss, line)) {
       if (line.empty()) continue;
+      Semantic key_sem = Semantic::Emphasis;
+      Semantic val_sem = Semantic::Default;
+      char marker = 0;
+      if (line[0] == '+' || line[0] == '-' || line[0] == '~' ||
+          line[0] == '=') {
+        marker = line[0];
+        line.erase(0, 1);
+        switch (marker) {
+          case '+': key_sem = val_sem = Semantic::Good; break;
+          case '-': key_sem = val_sem = Semantic::Bad; break;
+          case '~': key_sem = val_sem = Semantic::Warn; break;
+          case '=': key_sem = val_sem = Semantic::Dim; break;
+        }
+      }
       const auto eq = line.find('=');
-      Semantic val_semantic = Semantic::Default;
       std::string key, val;
       if (eq == std::string::npos) {
         key = line;
@@ -190,17 +222,18 @@ class ExampleAdapter : public ProductAdapter {
         key = line.substr(0, eq);
         val = line.substr(eq + 1);
       }
-      if (key == "commit_id" || key == "status") {
-        val_semantic = Semantic::Good;
-      } else if (key == "session") {
-        val_semantic = Semantic::Info;
-      } else if (val.empty() || val == "<none>") {
-        val_semantic = Semantic::Dim;
+      if (marker == 0) {
+        if (key == "commit_id" || key == "status") {
+          val_sem = Semantic::Good;
+        } else if (key == "session") {
+          val_sem = Semantic::Info;
+        } else if (val.empty() || val == "<none>") {
+          val_sem = Semantic::Dim;
+        }
       }
-      AddRow(t, {
-          Cell{key, Semantic::Emphasis},
-          Cell{val, val_semantic},
-      });
+      std::string key_label = key;
+      if (marker) key_label = std::format("{} {}", marker, key);
+      AddRow(t, {Cell{key_label, key_sem}, Cell{val, val_sem}});
     }
     RenderFormatted(t, renderer);
   }

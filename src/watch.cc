@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <format>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "einheit/cli/protocol/envelope.h"
+#include "einheit/cli/render/table.h"
 
 namespace einheit::cli::watch {
 namespace {
@@ -42,6 +44,14 @@ auto RunWatch(const WatchContext &ctx, std::atomic<bool> &stop,
       [&](const protocol::Event &ev) {
         std::lock_guard<std::mutex> lk(count_mu);
         ++count;
+        // Redraw in place — clear screen, write a dim header, hand
+        // off to the adapter. If caps can't clear the screen this
+        // just appends like before.
+        render::ClearScreen(ctx.renderer->Out(),
+                            ctx.renderer->Caps());
+        ctx.renderer->Out()
+            << std::format("watching {}  (event #{})\n\n",
+                           ev.topic, count);
         ctx.adapter->RenderEvent(ev.topic, ev, *ctx.renderer);
       };
 
