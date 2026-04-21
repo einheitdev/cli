@@ -165,6 +165,87 @@ auto FormatCommandHelp(const CommandSpec &spec) -> std::string {
   return out;
 }
 
+auto BuildHelpIndex(const CommandTree &tree) -> render::Table {
+  std::vector<const CommandSpec *> sorted;
+  sorted.reserve(tree.by_path.size());
+  for (const auto &[_, spec] : tree.by_path) sorted.push_back(&spec);
+  std::sort(sorted.begin(), sorted.end(),
+            [](const auto *a, const auto *b) {
+              return a->path < b->path;
+            });
+
+  render::Table t;
+  AddColumn(t, "command", render::Align::Left,
+            render::Priority::High);
+  AddColumn(t, "role", render::Align::Left,
+            render::Priority::Medium);
+  AddColumn(t, "description", render::Align::Left,
+            render::Priority::High);
+
+  for (const auto *s : sorted) {
+    render::Semantic role_sem = render::Semantic::Dim;
+    if (s->role == RoleGate::AdminOnly) {
+      role_sem = render::Semantic::Warn;
+    } else if (s->role == RoleGate::OperatorOrAdmin) {
+      role_sem = render::Semantic::Info;
+    }
+    AddRow(t, {
+        render::Cell{s->path, render::Semantic::Emphasis},
+        render::Cell{RoleLabel(s->role), role_sem},
+        render::Cell{s->help},
+    });
+  }
+  return t;
+}
+
+auto BuildCommandHelp(const CommandSpec &spec) -> render::Table {
+  render::Table t;
+  AddColumn(t, "field", render::Align::Left,
+            render::Priority::High);
+  AddColumn(t, "value", render::Align::Left,
+            render::Priority::High);
+
+  AddRow(t, {render::Cell{"command", render::Semantic::Emphasis},
+             render::Cell{spec.path, render::Semantic::Info}});
+  if (!spec.help.empty()) {
+    AddRow(t, {render::Cell{"summary", render::Semantic::Emphasis},
+               render::Cell{spec.help}});
+  }
+  render::Semantic role_sem = render::Semantic::Dim;
+  if (spec.role == RoleGate::AdminOnly) {
+    role_sem = render::Semantic::Warn;
+  } else if (spec.role == RoleGate::OperatorOrAdmin) {
+    role_sem = render::Semantic::Info;
+  }
+  AddRow(t, {render::Cell{"role", render::Semantic::Emphasis},
+             render::Cell{RoleLabel(spec.role), role_sem}});
+  if (spec.requires_session) {
+    AddRow(t, {render::Cell{"requires", render::Semantic::Emphasis},
+               render::Cell{"configure session",
+                            render::Semantic::Warn}});
+  }
+  for (std::size_t i = 0; i < spec.args.size(); ++i) {
+    const auto &a = spec.args[i];
+    std::string value = std::format(
+        "<{}> {}", a.name,
+        a.required ? "(required)" : "(optional)");
+    if (!a.type_ref.empty()) value += std::format(" : {}", a.type_ref);
+    if (!a.help.empty()) value += std::format(" — {}", a.help);
+    AddRow(t, {render::Cell{std::format("arg[{}]", i),
+                            render::Semantic::Emphasis},
+               render::Cell{value}});
+  }
+  for (std::size_t i = 0; i < spec.flags.size(); ++i) {
+    AddRow(t, {
+        render::Cell{std::format("flag[{}]", i),
+                     render::Semantic::Emphasis},
+        render::Cell{std::format("--{}", spec.flags[i]),
+                     render::Semantic::Info},
+    });
+  }
+  return t;
+}
+
 auto SuggestCompletions(const CommandTree &tree,
                         const std::vector<std::string> &preceding,
                         const std::string &partial)

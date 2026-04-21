@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "einheit/cli/error.h"
+#include "einheit/cli/render/table.h"
 
 namespace einheit::cli {
 
@@ -139,7 +140,10 @@ auto SuggestCompletions(const CommandTree &tree,
     -> std::vector<std::string>;
 
 /// Render the index of every command in the tree, one line per spec
-/// sorted by path. Used by bare `help` / `?`.
+/// sorted by path. Used by bare `help` / `?`. Returns a plain-text
+/// representation suitable for environments that don't have FTXUI
+/// handy (tests, documentation generation). For the interactive
+/// shell use BuildHelpIndex() + RenderFormatted().
 /// @param tree Registered commands.
 /// @returns Multi-line string ending with a trailing newline.
 auto FormatHelpIndex(const CommandTree &tree) -> std::string;
@@ -149,6 +153,21 @@ auto FormatHelpIndex(const CommandTree &tree) -> std::string;
 /// @param spec The spec to render.
 /// @returns Formatted help string.
 auto FormatCommandHelp(const CommandSpec &spec) -> std::string;
+
+/// Build a Table representing the command index: every path with
+/// its role and one-line description, sorted by path. Intended for
+/// the shell's `help` handler — pipe it through RenderFormatted to
+/// pick up colours, borders, and format switching (json/yaml/set).
+/// @param tree Registered commands.
+/// @returns Table with columns `command`, `role`, `description`.
+auto BuildHelpIndex(const CommandTree &tree) -> render::Table;
+
+/// Build a Table for a single CommandSpec — header block showing
+/// path + role + session requirement, followed by one row per arg
+/// and one row per flag. Used by the shell's `help <path>` handler.
+/// @param spec Command spec to describe.
+/// @returns Multi-row Table covering the whole spec.
+auto BuildCommandHelp(const CommandSpec &spec) -> render::Table;
 
 }  // namespace einheit::cli
 

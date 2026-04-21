@@ -137,16 +137,29 @@ auto Completions(const Schema &schema,
                  const std::string &partial_path)
     -> std::vector<std::string>;
 
-/// Walk every leaf and container in the schema and return a human-
-/// readable table: path, type (with range / enum values / format),
-/// default, and help text. Map keys are rendered as `<name>` and
-/// list items as `[0]`. Used by the `show schema` verb so operators
-/// can see what's configurable without referring to docs.
+/// Walk every leaf and container in the schema and return a plain-
+/// text description: path, type (with range / enum values / format),
+/// default, and help text. Kept for tests + doc generation.
 /// @param schema Schema to describe.
 /// @param prefix When non-empty, only paths under `prefix` are shown.
 /// @returns Multi-line string ending with a trailing newline.
 auto FormatSchema(const Schema &schema,
                   const std::string &prefix = "") -> std::string;
+
+}  // namespace einheit::cli::schema
+
+#include "einheit/cli/render/table.h"
+
+namespace einheit::cli::schema {
+
+/// Build a rendering Table describing the schema. Intended for
+/// `show schema` so the shell can pipe it through RenderFormatted
+/// and pick up colours + format switching.
+/// @param schema Schema to describe.
+/// @param prefix When non-empty, only paths under `prefix` are shown.
+/// @returns Table with columns `path`, `type`, `default`, `help`.
+auto BuildSchema(const Schema &schema,
+                 const std::string &prefix = "") -> render::Table;
 
 }  // namespace einheit::cli::schema
 

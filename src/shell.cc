@@ -437,7 +437,8 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
     if (result->handled_locally) {
       if (parsed->spec->path == "help") {
         if (parsed->args.empty()) {
-          std::cout << FormatHelpIndex(s.tree);
+          auto tbl = BuildHelpIndex(s.tree);
+          render::RenderFormatted(tbl, renderer);
         } else {
           std::string target_path;
           for (std::size_t i = 0; i < parsed->args.size(); ++i) {
@@ -446,17 +447,21 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
           }
           auto it = s.tree.by_path.find(target_path);
           if (it == s.tree.by_path.end()) {
-            std::cerr << std::format(
-                "help: no such command '{}'\n", target_path);
+            render::RenderError(
+                "help",
+                std::format("no such command '{}'", target_path),
+                "", renderer);
           } else {
-            std::cout << FormatCommandHelp(it->second);
+            auto tbl = BuildCommandHelp(it->second);
+            render::RenderFormatted(tbl, renderer);
           }
         }
       } else if (parsed->spec->path == "show schema") {
         const std::string prefix =
             parsed->args.empty() ? "" : parsed->args[0];
-        std::cout << schema::FormatSchema(s.adapter->GetSchema(),
-                                          prefix);
+        auto tbl =
+            schema::BuildSchema(s.adapter->GetSchema(), prefix);
+        render::RenderFormatted(tbl, renderer);
       }
       continue;
     }

@@ -462,6 +462,54 @@ auto FormatSchema(const Schema &schema, const std::string &prefix)
   return out;
 }
 
+namespace {
+auto CollectEntries(const Schema &schema, const std::string &prefix)
+    -> std::vector<Entry> {
+  std::vector<Entry> entries;
+  WalkObject(schema.root, "", entries);
+  if (!prefix.empty()) {
+    std::erase_if(entries, [&](const Entry &e) {
+      return e.path.rfind(prefix, 0) != 0;
+    });
+  }
+  return entries;
+}
+}  // namespace
+
+auto BuildSchema(const Schema &schema, const std::string &prefix)
+    -> render::Table {
+  render::Table t;
+  render::AddColumn(t, "path", render::Align::Left,
+                    render::Priority::High);
+  render::AddColumn(t, "type", render::Align::Left,
+                    render::Priority::High);
+  render::AddColumn(t, "default", render::Align::Left,
+                    render::Priority::Medium);
+  render::AddColumn(t, "help", render::Align::Left,
+                    render::Priority::Medium);
+
+  const auto entries = CollectEntries(schema, prefix);
+  for (const auto &e : entries) {
+    render::Semantic type_sem = render::Semantic::Info;
+    if (e.type_desc.starts_with("enum")) {
+      type_sem = render::Semantic::Warn;
+    } else if (e.type_desc == "object" || e.type_desc == "map" ||
+               e.type_desc == "list") {
+      type_sem = render::Semantic::Dim;
+    }
+    render::AddRow(t, {
+        render::Cell{e.path, render::Semantic::Emphasis},
+        render::Cell{e.type_desc, type_sem},
+        render::Cell{e.default_value,
+                     e.default_value.empty()
+                         ? render::Semantic::Dim
+                         : render::Semantic::Good},
+        render::Cell{e.help, render::Semantic::Default},
+    });
+  }
+  return t;
+}
+
 auto Completions(const Schema &schema,
                  const std::string &partial_path)
     -> std::vector<std::string> {
