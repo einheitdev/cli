@@ -8,15 +8,18 @@
 #include <format>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <ostream>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "einheit/cli/adapter.h"
 #include "einheit/cli/command_tree.h"
 #include "einheit/cli/protocol/envelope.h"
+#include "einheit/cli/render/sparkline.h"
 #include "einheit/cli/render/table.h"
 #include "einheit/cli/schema.h"
 
@@ -137,6 +140,16 @@ class ExampleAdapter : public ProductAdapter {
       c.help = "Show daemon status";
       out.push_back(std::move(c));
     }
+    {
+      // Framework-local — rendered from subscribed events only,
+      // not a wire RPC. Used with `watch metrics` to demo the
+      // sparkline column.
+      CommandSpec c;
+      c.path = "metrics";
+      c.wire_command = "";
+      c.help = "Show live metric series (use with `watch`)";
+      out.push_back(std::move(c));
+    }
     return out;
   }
 
@@ -240,19 +253,71 @@ class ExampleAdapter : public ProductAdapter {
 
   auto EventTopicsFor(const CommandSpec &cmd) const
       -> std::vector<std::string> override {
-    (void)cmd;
+    if (cmd.path == "metrics") return {"state.metrics."};
     return {};
   }
 
   auto RenderEvent(const std::string &topic, const Event &event,
                    Renderer &renderer) const -> void override {
-    (void)topic;
-    (void)event;
-    (void)renderer;
+    using einheit::cli::render::AddColumn;
+    using einheit::cli::render::AddRow;
+    using einheit::cli::render::Align;
+    using einheit::cli::render::Cell;
+    using einheit::cli::render::Priority;
+    using einheit::cli::render::RenderFormatted;
+    using einheit::cli::render::Semantic;
+
+    // Each event carries one sample for one metric. We keep a
+    // bounded rolling buffer per metric (mutable because the
+    // contract has RenderEvent as const).
+    std::lock_guard<std::mutex> lk(series_mu_);
+    const auto name =
+        topic.starts_with("state.metrics.")
+            ? topic.substr(14)
+            : topic;
+    try {
+      const std::string text(event.data.begin(), event.data.end());
+      const auto value = std::stod(text);
+      auto &series = series_[name];
+      series.push_back(value);
+      const std::size_t kWindow = 32;
+      if (series.size() > kWindow) {
+        series.erase(series.begin(),
+                     series.begin() +
+                         (series.size() - kWindow));
+      }
+    } catch (...) {
+      return;
+    }
+
+    // Render a fresh table over the rolling state.
+    einheit::cli::render::Table t;
+    AddColumn(t, "metric", Align::Left, Priority::High);
+    AddColumn(t, "last", Align::Right, Priority::High);
+    AddColumn(t, "trend", Align::Left, Priority::High);
+    std::vector<std::string> keys;
+    keys.reserve(series_.size());
+    for (const auto &[k, _] : series_) keys.push_back(k);
+    std::sort(keys.begin(), keys.end());
+    for (const auto &k : keys) {
+      const auto &s = series_.at(k);
+      if (s.empty()) continue;
+      AddRow(t, {
+          Cell{k, Semantic::Emphasis},
+          Cell{std::format("{:.0f}", s.back()),
+               Semantic::Info},
+          Cell{einheit::cli::render::Sparkline(s, renderer.Caps()),
+               Semantic::Good},
+      });
+    }
+    RenderFormatted(t, renderer);
   }
 
  private:
   std::shared_ptr<Schema> schema_;
+  mutable std::mutex series_mu_;
+  mutable std::unordered_map<std::string, std::vector<double>>
+      series_;
 };
 
 }  // namespace

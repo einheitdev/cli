@@ -38,6 +38,7 @@
 #include "einheit/cli/render/pager.h"
 #include "einheit/cli/render/table.h"
 #include "einheit/cli/schema.h"
+#include "einheit/cli/watch.h"
 #include "einheit/cli/workstation_state.h"
 
 namespace einheit::cli::shell {
@@ -769,6 +770,46 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
             st.active_theme = name;
             (void)workstation::Save(workstation::DefaultPath(), st);
             std::cout << std::format("  theme → `{}`\n", name);
+          }
+        }
+      } else if (parsed->spec->path == "watch") {
+        if (parsed->args.empty()) {
+          render::RenderError(
+              "watch", "usage: watch <command...>",
+              "example: watch metrics", renderer);
+        } else {
+          // Find the inner command's spec.
+          std::string inner_path;
+          for (std::size_t i = 0; i < parsed->args.size(); ++i) {
+            if (i > 0) inner_path += ' ';
+            inner_path += parsed->args[i];
+          }
+          auto it = s.tree.by_path.find(inner_path);
+          if (it == s.tree.by_path.end()) {
+            render::RenderError(
+                "watch",
+                std::format("no such command '{}'", inner_path),
+                "", renderer);
+          } else {
+            watch::WatchContext wctx;
+            wctx.tx = s.tx.get();
+            wctx.adapter = s.adapter.get();
+            wctx.spec = &it->second;
+            wctx.renderer = &renderer;
+            std::atomic<bool> stop{false};
+            std::cerr << std::format(
+                "watching `{}` — 10s window. Ctrl-C to abort "
+                "early.\n",
+                inner_path);
+            auto r = watch::RunWatch(
+                wctx, stop, std::chrono::milliseconds(10'000));
+            if (!r) {
+              render::RenderError("watch", r.error().message, "",
+                                  renderer);
+            } else {
+              std::cerr << std::format(
+                  "  watch ended — {} events\n", *r);
+            }
           }
         }
       } else if (parsed->spec->path == "macro record") {

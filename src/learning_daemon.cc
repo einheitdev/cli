@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <span>
 #include <string>
 #include <thread>
@@ -69,6 +70,7 @@ struct LearningDaemon::Impl {
   zmq::context_t ctx{1};
   zmq::socket_t rep{ctx, zmq::socket_type::rep};
   zmq::socket_t pub{ctx, zmq::socket_type::pub};
+  std::mutex pub_mu;
 
   std::mutex mu;
   std::unordered_map<std::string, std::string> running;
@@ -78,6 +80,7 @@ struct LearningDaemon::Impl {
       commits;
 
   std::thread thread;
+  std::thread heartbeat_thread;
   std::atomic<bool> stop{false};
 
   std::ostream *trace = nullptr;
@@ -344,11 +347,46 @@ LearningDaemon::LearningDaemon(
   impl_->pub.bind(impl_->pub_ep);
 
   impl_->thread = std::thread([d = impl_.get()]() { Loop(*d); });
+
+  // Heartbeat publisher: emits mock metric events on
+  // state.metrics.* every ~300ms so `watch metrics` has something
+  // to draw. Random int in data field; adapter parses + folds into
+  // a rolling sparkline.
+  impl_->heartbeat_thread = std::thread([d = impl_.get()]() {
+    std::mt19937_64 rng{std::random_device{}()};
+    std::uniform_int_distribution<int> dist(5, 95);
+    while (!d->stop.load()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(300));
+      if (d->stop.load()) break;
+      for (const char *name : {"latency_ms", "tx_pps"}) {
+        protocol::Event ev;
+        ev.topic = std::format("state.metrics.{}", name);
+        ev.timestamp = "";
+        const auto value = std::to_string(dist(rng));
+        ev.data.assign(value.begin(), value.end());
+        auto body = protocol::EncodeEventBody(ev);
+        if (!body) continue;
+        std::lock_guard<std::mutex> lk(d->pub_mu);
+        try {
+          zmq::message_t topic_frame(ev.topic.data(),
+                                      ev.topic.size());
+          d->pub.send(topic_frame, zmq::send_flags::sndmore);
+          zmq::message_t body_frame(body->data(), body->size());
+          d->pub.send(body_frame, zmq::send_flags::none);
+        } catch (...) {
+          // shutting down
+        }
+      }
+    }
+  });
 }
 
 LearningDaemon::~LearningDaemon() {
   impl_->stop.store(true);
   if (impl_->thread.joinable()) impl_->thread.join();
+  if (impl_->heartbeat_thread.joinable()) {
+    impl_->heartbeat_thread.join();
+  }
 }
 
 auto LearningDaemon::ControlEndpoint() const -> const std::string & {

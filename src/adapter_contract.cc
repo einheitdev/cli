@@ -39,13 +39,25 @@ auto ValidateAdapter(const ProductAdapter &adapter)
   render::Renderer renderer(sink, caps);
 
   for (const auto &spec : adapter.Commands()) {
-    if (spec.path.empty() || spec.wire_command.empty()) {
+    if (spec.path.empty()) {
       return std::unexpected(MakeError(
           ContractError::InvalidSpec,
-          std::format("spec has empty path or wire_command: '{}'",
+          "spec has empty path"));
+    }
+    // A wire_command is required UNLESS the spec declares event
+    // topics — watch-only adapter commands (e.g. `metrics`) exist
+    // solely to carry subscribe metadata and never cross the RPC
+    // wire.
+    if (spec.wire_command.empty() &&
+        adapter.EventTopicsFor(spec).empty()) {
+      return std::unexpected(MakeError(
+          ContractError::InvalidSpec,
+          std::format("spec '{}' has neither wire_command nor "
+                      "event topics",
                       spec.path)));
     }
-    if (!wire_commands.insert(spec.wire_command).second) {
+    if (!spec.wire_command.empty() &&
+        !wire_commands.insert(spec.wire_command).second) {
       return std::unexpected(MakeError(
           ContractError::DuplicateWireCommand,
           std::format("two specs share wire_command '{}'",
