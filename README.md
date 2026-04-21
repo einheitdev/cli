@@ -4,6 +4,8 @@ Shared C++ framework for every Einheit Networks product CLI.
 
 One framework, one wire protocol, many product adapters.
 
+Licensed under the MIT License — see [LICENSE](LICENSE).
+
 ## Build
 
 ```bash
