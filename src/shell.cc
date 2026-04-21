@@ -23,9 +23,6 @@
 #include <utility>
 #include <vector>
 
-#ifdef EINHEIT_HAVE_READLINE
-#include <readline/history.h>
-#endif
 
 #include "einheit/cli/aliases.h"
 #include "einheit/cli/audit.h"
@@ -439,24 +436,40 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
     if (!raw->empty() && (*raw)[0] == '#') continue;
 
     // History expansion: `!!` reruns the last entry, `!N` reruns
-    // entry N, `!pfx` reruns the last matching prefix. Failure
-    // (e.g. no prior entry) falls back to the literal input.
+    // entry N (1-indexed), `!prefix` reruns the most recent entry
+    // starting with `prefix`. Failure falls back to the literal
+    // input. Implemented against our own History since replxx
+    // doesn't expose bash-style expansion.
     std::string expanded = *raw;
-#ifdef EINHEIT_HAVE_READLINE
-    {
-      char *result = nullptr;
-      const int rc =
-          ::history_expand(expanded.data(), &result);
-      if (rc >= 0 && result) {
-        expanded = result;
-        if (rc == 1) {
-          // Show the expanded form — matches bash behaviour.
-          std::cout << expanded << '\n';
+    if (expanded.size() >= 2 && expanded[0] == '!' &&
+        !history.entries.empty()) {
+      const auto rest = expanded.substr(1);
+      std::optional<std::string> hit;
+      if (rest == "!") {
+        hit = history.entries.back();
+      } else if (rest.find_first_not_of("0123456789") ==
+                 std::string::npos) {
+        try {
+          const auto n = std::stoul(rest);
+          if (n >= 1 && n <= history.entries.size()) {
+            hit = history.entries[n - 1];
+          }
+        } catch (...) {
+        }
+      } else {
+        for (auto it = history.entries.rbegin();
+             it != history.entries.rend(); ++it) {
+          if (it->rfind(rest, 0) == 0) {
+            hit = *it;
+            break;
+          }
         }
       }
-      if (result) std::free(result);
+      if (hit) {
+        expanded = *hit;
+        std::cout << expanded << '\n';
+      }
     }
-#endif
 
     const auto line = Expand(aliases, expanded);
     if (line.empty()) continue;

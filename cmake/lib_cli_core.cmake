@@ -24,10 +24,6 @@ add_library(cli_core_obj OBJECT
   src/learning_daemon.cc
 )
 
-if(EINHEIT_HAVE_READLINE)
-  target_compile_definitions(cli_core_obj PRIVATE EINHEIT_HAVE_READLINE=1)
-endif()
-
 target_include_directories(cli_core_obj
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -42,11 +38,7 @@ target_link_libraries(cli_core_obj
     yaml-cpp::yaml-cpp
     spdlog::spdlog
     CLI11::CLI11
-)
-
-target_include_directories(cli_core_obj
-  PRIVATE
-    ${READLINE_INCLUDE_DIR}
+    replxx::replxx
 )
 
 add_library(einheit_cli STATIC
@@ -67,5 +59,5 @@ target_link_libraries(einheit_cli
     yaml-cpp::yaml-cpp
     spdlog::spdlog
     CLI11::CLI11
-    ${READLINE_LIB}
+    replxx::replxx
 )

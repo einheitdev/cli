@@ -40,20 +40,7 @@ if(NOT TARGET cppzmq)
   FetchContent_MakeAvailable(cppzmq)
 endif()
 
-# ----- readline (system package; optional — falls back to std::cin) ---------
-find_library(READLINE_LIB readline)
-find_path(READLINE_INCLUDE_DIR readline/readline.h)
-if(READLINE_LIB AND READLINE_INCLUDE_DIR)
-  message(STATUS "GNU readline: ${READLINE_LIB}")
-  set(EINHEIT_HAVE_READLINE 1)
-else()
-  message(STATUS
-    "GNU readline not found — line editing will fall back to "
-    "std::cin. Install libreadline-dev for tab completion / Ctrl-R.")
-  set(READLINE_LIB "")
-  set(READLINE_INCLUDE_DIR "")
-  set(EINHEIT_HAVE_READLINE 0)
-endif()
+# ----- readline removed — replxx (fetched below) is the line editor -------
 
 # ----- yaml-cpp (system package preferred) ----------------------------------
 find_package(yaml-cpp QUIET)
@@ -117,6 +104,17 @@ FetchContent_Declare(ftxui
   GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(ftxui)
+
+# ----- replxx (interactive line editing) ------------------------------------
+set(REPLXX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(REPLXX_BUILD_PACKAGE OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(replxx
+  GIT_REPOSITORY https://github.com/AmokHuginnsson/replxx.git
+  GIT_TAG release-0.0.4
+  GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(replxx)
 
 # ----- GoogleTest (for tests) -----------------------------------------------
 if(EINHEIT_BUILD_TESTS)
