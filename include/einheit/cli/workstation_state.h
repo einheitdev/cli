@@ -31,6 +31,8 @@ struct State {
   std::optional<std::string> active_target;
   /// Named theme selected by the most recent `theme use` command.
   std::optional<std::string> active_theme;
+  /// Status-chips line preference. nullopt means default (off).
+  std::optional<bool> show_status_bar;
 };
 
 /// Default location of the state file.

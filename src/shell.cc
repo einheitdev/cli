@@ -420,11 +420,14 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
       });
 
   while (true) {
-    // Status bar is its own line above the prompt so readline
-    // doesn't see an embedded newline or unwrapped ANSI in what
-    // it thinks is a single-line prompt.
-    if (const auto status = StatusBar(s, theme); !status.empty()) {
-      std::cout << status << std::flush;
+    // Status bar is its own line above the prompt so the reader
+    // doesn't see an embedded newline in its prompt. Opt-in via
+    // --status-bar or the in-shell `statusbar on` command.
+    if (s.show_status_bar) {
+      if (const auto status = StatusBar(s, theme);
+          !status.empty()) {
+        std::cout << status << std::flush;
+      }
     }
     auto raw = reader->ReadLine(PromptFor(s, meta, theme));
     if (!raw) break;
@@ -730,6 +733,38 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
         row("aliases loaded", !aliases.table.empty(),
             std::format("{} entries", aliases.table.size()));
         render::RenderFormatted(t, renderer);
+      } else if (parsed->spec->path == "statusbar") {
+        // `statusbar` (no args) = report current state
+        // `statusbar on|off|toggle` = set + persist
+        if (parsed->args.empty()) {
+          std::cout << std::format(
+              "  statusbar is {}\n",
+              s.show_status_bar ? "on" : "off");
+        } else {
+          const auto &arg = parsed->args[0];
+          if (arg == "on") s.show_status_bar = true;
+          else if (arg == "off") s.show_status_bar = false;
+          else if (arg == "toggle") {
+            s.show_status_bar = !s.show_status_bar;
+          } else {
+            render::RenderError(
+                "statusbar",
+                std::format("unknown value '{}'", arg),
+                "try: statusbar on | off | toggle", renderer);
+            continue;
+          }
+          workstation::State st;
+          if (auto prior = workstation::Load(
+                  workstation::DefaultPath());
+              prior) {
+            st = *prior;
+          }
+          st.show_status_bar = s.show_status_bar;
+          (void)workstation::Save(workstation::DefaultPath(), st);
+          std::cout << std::format(
+              "  statusbar → {}\n",
+              s.show_status_bar ? "on" : "off");
+        }
       } else if (parsed->spec->path == "theme list") {
         render::Table t;
         render::AddColumn(t, "theme", render::Align::Left,

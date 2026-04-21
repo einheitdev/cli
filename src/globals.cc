@@ -61,6 +61,9 @@ auto RegisterGlobals(CommandTree &tree)
       Make("theme use", "",
            "Switch to a named theme for the remainder of this "
            "session"),
+      Make("statusbar", "",
+           "Toggle the status chips line above the prompt: "
+           "`statusbar on|off`"),
       Make("macro record", "",
            "Start recording a macro; `macro end` stops"),
       Make("macro end", "", "Stop recording the current macro"),

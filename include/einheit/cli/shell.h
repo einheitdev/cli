@@ -66,6 +66,12 @@ struct Shell {
   /// back via stdin or `--replay`.
   std::string record_path;
 
+  /// Whether to print the status-chips line above every prompt.
+  /// Off by default (some operators find the extra line busy);
+  /// toggle with `--status-bar` or the in-shell `statusbar on`
+  /// command.
+  bool show_status_bar = false;
+
   /// Running totals for the session summary printed on exit.
   struct Stats {
     std::size_t commands = 0;

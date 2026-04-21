@@ -319,6 +319,9 @@ auto main(int argc, char **argv) -> int {
   app.add_option("--replay", replay_path,
                  "Re-run a session from a recorded file "
                  "(lines starting with `#` are skipped)");
+  bool status_bar_flag = false;
+  app.add_flag("--status-bar", status_bar_flag,
+               "Show a live status-chips line above the prompt");
 
   // Client-side subcommands that don't need a transport.
   auto *key_cmd = app.add_subcommand(
@@ -407,6 +410,11 @@ auto main(int argc, char **argv) -> int {
   s.learning_mode = learn;
   s.target_name = target;
   s.record_path = record_path;
+  if (auto saved = workstation::Load(workstation::DefaultPath());
+      saved && saved->show_status_bar) {
+    s.show_status_bar = *saved->show_status_bar;
+  }
+  if (status_bar_flag) s.show_status_bar = true;
 
   // --replay redirects stdin so the existing std::getline / readline
   // path reads the file line-by-line. readline's recordless mode

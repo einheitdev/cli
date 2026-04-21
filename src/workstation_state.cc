@@ -42,6 +42,9 @@ auto Load(const std::string &path)
     if (doc["active_theme"]) {
       s.active_theme = doc["active_theme"].as<std::string>();
     }
+    if (doc["show_status_bar"]) {
+      s.show_status_bar = doc["show_status_bar"].as<bool>();
+    }
     return s;
   } catch (const YAML::Exception &e) {
     return std::unexpected(
@@ -66,6 +69,9 @@ auto Save(const std::string &path, const State &s)
     }
     if (s.active_theme) {
       doc["active_theme"] = *s.active_theme;
+    }
+    if (s.show_status_bar) {
+      doc["show_status_bar"] = *s.show_status_bar;
     }
     std::ofstream f(path, std::ios::trunc);
     if (!f) {
