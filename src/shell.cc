@@ -484,36 +484,84 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
             schema::BuildSchema(s.adapter->GetSchema(), prefix);
         render::RenderFormatted(tbl, renderer);
       } else if (parsed->spec->path == "alias") {
-        render::Table t;
-        render::AddColumn(t, "alias", render::Align::Left,
-                          render::Priority::High);
-        render::AddColumn(t, "expands to", render::Align::Left,
-                          render::Priority::High);
-        render::AddColumn(t, "help", render::Align::Left,
-                          render::Priority::Medium);
-        std::vector<std::string> keys;
-        keys.reserve(aliases.table.size());
-        for (const auto &[k, _] : aliases.table) {
-          keys.push_back(k);
-        }
-        std::sort(keys.begin(), keys.end());
-        for (const auto &k : keys) {
-          const auto help_it = aliases.help.find(k);
-          render::AddRow(t, {
-              render::Cell{k, render::Semantic::Emphasis},
-              render::Cell{aliases.table.at(k),
-                           render::Semantic::Info},
-              render::Cell{help_it != aliases.help.end()
-                               ? help_it->second
-                               : std::string{},
-                           render::Semantic::Dim},
-          });
-        }
-        if (keys.empty()) {
-          std::cout
-              << "  (no aliases — see ~/.einheit/aliases.yaml)\n";
+        // `alias`                       → list
+        // `alias <name> <expansion...>` → define or replace
+        // `alias delete <name>`         → remove
+        const auto yaml_path = DefaultYamlPath();
+        if (parsed->args.empty()) {
+          render::Table t;
+          render::AddColumn(t, "alias", render::Align::Left,
+                            render::Priority::High);
+          render::AddColumn(t, "expands to", render::Align::Left,
+                            render::Priority::High);
+          render::AddColumn(t, "help", render::Align::Left,
+                            render::Priority::Medium);
+          std::vector<std::string> keys;
+          keys.reserve(aliases.table.size());
+          for (const auto &[k, _] : aliases.table) keys.push_back(k);
+          std::sort(keys.begin(), keys.end());
+          for (const auto &k : keys) {
+            const auto help_it = aliases.help.find(k);
+            render::AddRow(t, {
+                render::Cell{k, render::Semantic::Emphasis},
+                render::Cell{aliases.table.at(k),
+                             render::Semantic::Info},
+                render::Cell{help_it != aliases.help.end()
+                                 ? help_it->second
+                                 : std::string{},
+                             render::Semantic::Dim},
+            });
+          }
+          if (keys.empty()) {
+            std::cout << "  (no aliases — try: "
+                         "alias st show status)\n";
+          } else {
+            render::RenderFormatted(t, renderer);
+          }
+        } else if (parsed->args[0] == "delete" ||
+                   parsed->args[0] == "remove" ||
+                   parsed->args[0] == "rm") {
+          if (parsed->args.size() < 2) {
+            render::RenderError(
+                "alias", "usage: alias delete <name>", "",
+                renderer);
+          } else {
+            const auto &name = parsed->args[1];
+            if (auto r = RemoveYamlAlias(yaml_path, name); !r) {
+              render::RenderError("alias", r.error().message, "",
+                                  renderer);
+            } else {
+              aliases.table.erase(name);
+              aliases.help.erase(name);
+              std::cout << std::format("  removed alias `{}`\n",
+                                       name);
+            }
+          }
+        } else if (parsed->args.size() < 2) {
+          render::RenderError(
+              "alias",
+              "usage: alias [<name> <expansion...>] | "
+              "delete <name>",
+              "", renderer);
         } else {
-          render::RenderFormatted(t, renderer);
+          // Define: first arg is the name, rest joined as
+          // expansion.
+          const auto name = parsed->args[0];
+          std::string expansion;
+          for (std::size_t i = 1; i < parsed->args.size(); ++i) {
+            if (!expansion.empty()) expansion += ' ';
+            expansion += parsed->args[i];
+          }
+          if (auto r = SetYamlAlias(yaml_path, name, expansion);
+              !r) {
+            render::RenderError("alias", r.error().message, "",
+                                renderer);
+          } else {
+            aliases.table[name] = expansion;
+            std::cout << std::format(
+                "  alias `{}` → `{}`\n  saved to {}\n", name,
+                expansion, yaml_path);
+          }
         }
       }
       continue;

@@ -72,7 +72,10 @@ auto RegisterGlobals(CommandTree &tree)
       Make("exit", "", "Exit the shell"),
       Make("quit", "", "Exit the shell"),
       Make("history", "", "Show the current user's command history"),
-      Make("alias", "", "List or edit user command aliases"),
+      Make("alias", "",
+           "List aliases; `alias <name> <expansion...>` to define, "
+           "`alias delete <name>` to remove. Persists to "
+           "~/.einheit/aliases.yaml."),
       Make("watch", "", "Re-run a show command on event"),
       Make("logs", "", "Print daemon logs; use `logs --follow`"),
       Make("shell", "", "Drop to a POSIX shell (audit-logged)",

@@ -77,6 +77,27 @@ auto DefaultYamlPath() -> std::string;
 /// @param other Source; unchanged.
 auto MergeAliases(Aliases &base, const Aliases &other) -> void;
 
+/// Add (or replace) one alias in a YAML file. Preserves other keys
+/// in the document — notably `include:` — so this is safe to call
+/// on a user file that composes several sources. Creates the file
+/// (and its parent directory) if missing.
+/// @param path Absolute path to the YAML file to mutate.
+/// @param name Alias name (first token of the eventual line).
+/// @param expansion The text the name expands to.
+/// @returns void on success, AliasError otherwise.
+auto SetYamlAlias(const std::string &path, const std::string &name,
+                  const std::string &expansion)
+    -> std::expected<void, Error<AliasError>>;
+
+/// Remove an alias from the YAML file. No-op if the name isn't
+/// present. Returns AliasError::NotAccessible if the file itself
+/// is missing.
+/// @param path Absolute path to the YAML file to mutate.
+/// @param name Alias to remove.
+/// @returns void on success, AliasError otherwise.
+auto RemoveYamlAlias(const std::string &path, const std::string &name)
+    -> std::expected<void, Error<AliasError>>;
+
 /// Expand leading alias on an input line. No-op if first token is
 /// not a known alias. Cycle-safe: expansion is single-pass.
 /// @param a Loaded alias table.

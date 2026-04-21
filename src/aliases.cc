@@ -125,6 +125,61 @@ auto MergeAliases(Aliases &base, const Aliases &other) -> void {
   for (const auto &[k, v] : other.help) base.help[k] = v;
 }
 
+auto SetYamlAlias(const std::string &path, const std::string &name,
+                  const std::string &expansion)
+    -> std::expected<void, Error<AliasError>> {
+  namespace fs = std::filesystem;
+  try {
+    YAML::Node doc;
+    if (fs::exists(path)) doc = YAML::LoadFile(path);
+    doc["aliases"][name] = expansion;
+    fs::create_directories(fs::path(path).parent_path());
+    std::ofstream f(path, std::ios::trunc);
+    if (!f) {
+      return std::unexpected(MakeError(
+          AliasError::NotAccessible,
+          std::format("could not open for write: {}", path)));
+    }
+    f << doc;
+    return {};
+  } catch (const YAML::Exception &e) {
+    return std::unexpected(
+        MakeError(AliasError::Malformed, e.what()));
+  } catch (const std::exception &e) {
+    return std::unexpected(
+        MakeError(AliasError::NotAccessible, e.what()));
+  }
+}
+
+auto RemoveYamlAlias(const std::string &path,
+                     const std::string &name)
+    -> std::expected<void, Error<AliasError>> {
+  namespace fs = std::filesystem;
+  if (!fs::exists(path)) {
+    return std::unexpected(MakeError(
+        AliasError::NotAccessible,
+        std::format("alias file not found: {}", path)));
+  }
+  try {
+    YAML::Node doc = YAML::LoadFile(path);
+    if (doc["aliases"]) doc["aliases"].remove(name);
+    std::ofstream f(path, std::ios::trunc);
+    if (!f) {
+      return std::unexpected(MakeError(
+          AliasError::NotAccessible,
+          std::format("could not open for write: {}", path)));
+    }
+    f << doc;
+    return {};
+  } catch (const YAML::Exception &e) {
+    return std::unexpected(
+        MakeError(AliasError::Malformed, e.what()));
+  } catch (const std::exception &e) {
+    return std::unexpected(
+        MakeError(AliasError::NotAccessible, e.what()));
+  }
+}
+
 auto Expand(const Aliases &a, const std::string &line) -> std::string {
   std::istringstream iss(line);
   std::string first;
