@@ -37,6 +37,10 @@ einheit_add_test(test_format_output)
 einheit_add_test(test_learning_daemon)
 einheit_add_test(test_theme)
 
+# End-to-end integration test: builds a tiny daemon binary and
+# drives the real einheit binary against it.
+add_subdirectory(integ)
+
 # Adapter contract test links the shipped example adapter to assert
 # the template stays well-formed.
 add_executable(test_adapter_contract test_adapter_contract.cc)

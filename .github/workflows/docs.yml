@@ -1,0 +1,44 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  doxygen:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install doxygen + graphviz
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            doxygen graphviz
+
+      - name: Generate docs
+        run: doxygen Doxyfile
+
+      - name: Upload pages artefact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/doc/html
+
+  deploy:
+    needs: doxygen
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
