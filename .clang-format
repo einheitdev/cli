@@ -1,0 +1,12 @@
+BasedOnStyle: Google
+Standard: c++20
+ColumnLimit: 80
+IndentWidth: 2
+UseTab: Never
+AccessModifierOffset: -1
+DerivePointerAlignment: false
+PointerAlignment: Right
+AllowShortFunctionsOnASingleLine: Empty
+AlwaysBreakAfterReturnType: None
+AlwaysBreakTemplateDeclarations: Yes
+IncludeBlocks: Regroup

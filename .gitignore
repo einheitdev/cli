@@ -1,0 +1,9 @@
+build/
+build-debug/
+build-aarch64/
+compile_commands.json
+.cache/
+.vscode/
+*.o
+*.a
+*.so

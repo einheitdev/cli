@@ -1,0 +1,33 @@
+# Example shareable alias file for einheit-cli.
+#
+# Copy this to ~/.einheit/aliases.yaml, or commit a team version to a
+# repo and point at it via `include:`:
+#
+#   # ~/.einheit/aliases.yaml
+#   include:
+#     - /home/ops/team-repo/einheit-aliases.yaml
+#   aliases:
+#     # personal overrides below
+#
+# Reload is automatic on each shell invocation. `alias` from inside
+# the shell lists the active table, including inherited entries.
+
+aliases:
+  # Short form: name → expansion
+  st: show status
+  sc: show config
+  sh: show commits
+
+  # Structured form: expansion + help text
+  conf:
+    expansion: configure
+    help: "Enter configure mode"
+
+  commit-check:
+    expansion: commit confirmed 10
+    help: "Commit with a 10-second auto-rollback window"
+
+  # Configure-mode shortcuts
+  seth: set hostname
+  setp: set port
+  setm: set mode

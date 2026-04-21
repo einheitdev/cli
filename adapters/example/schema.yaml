@@ -1,0 +1,55 @@
+# Example product schema.
+#
+# This schema backs the example adapter and drives `set` validation
+# and tab completion in learning mode. Operators can play with it by
+# running `einheit --learn` and typing `configure` → `set <TAB>`.
+version: 1
+product: example
+
+config:
+  hostname:
+    type: string
+    required: true
+    help: "Appliance hostname"
+    example: "einheit-demo"
+
+  port:
+    type: integer
+    range: [1, 65535]
+    default: "443"
+    help: "Management API listen port"
+
+  mode:
+    type: enum
+    values: [active, standby, off]
+    default: "active"
+    help: "Operating mode"
+
+  admin_email:
+    type: string
+    help: "Notification address for alerts"
+
+  management_network:
+    type: cidr
+    help: "CIDR that may reach the management port"
+    example: "10.0.0.0/24"
+
+  interfaces:
+    type: map
+    key: string
+    value:
+      type: object
+      fields:
+        address:
+          type: cidr
+          help: "Interface address + prefix"
+        vlan:
+          type: integer
+          range: [1, 4094]
+          help: "802.1Q VLAN tag"
+        enabled:
+          type: boolean
+          default: "true"
+          help: "Whether the interface is up"
+
+types: {}
