@@ -332,6 +332,20 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
   History history;
   if (auto h = Load(s.caller.user); h) history = *h;
 
+  // Macro recording state (separate from --record). Per-user
+  // macro files live under ~/.einheit/macros/<name>.einheit.
+  std::unique_ptr<std::ofstream> macro_recording;
+  std::string macro_recording_name;
+  const std::string macros_dir = [] {
+    if (const char *home = std::getenv("HOME"); home) {
+      return std::format("{}/.einheit/macros", home);
+    }
+    return std::string{};
+  }();
+  const auto macro_path = [&](const std::string &name) {
+    return std::format("{}/{}.einheit", macros_dir, name);
+  };
+
   // Optional recording file. Every accepted command lands here,
   // one per line, so `einheit --replay file` (or piping the file
   // back as stdin) re-runs the same session.
@@ -449,6 +463,13 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
     if (record) {
       *record << line << '\n';
       record->flush();
+    }
+    // Macro recording captures every line except the macro control
+    // verbs themselves, so the saved file doesn't include its own
+    // begin/end instructions.
+    if (macro_recording && !line.starts_with("macro ")) {
+      *macro_recording << line << '\n';
+      macro_recording->flush();
     }
 
     auto tokens = Tokenize(line);
@@ -748,6 +769,176 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
             st.active_theme = name;
             (void)workstation::Save(workstation::DefaultPath(), st);
             std::cout << std::format("  theme → `{}`\n", name);
+          }
+        }
+      } else if (parsed->spec->path == "macro record") {
+        if (parsed->args.empty()) {
+          render::RenderError("macro",
+                              "usage: macro record <name>", "",
+                              renderer);
+        } else if (macro_recording) {
+          render::RenderError(
+              "macro",
+              std::format("already recording `{}`; run `macro "
+                          "end` first",
+                          macro_recording_name),
+              "", renderer);
+        } else {
+          const auto name = parsed->args[0];
+          std::filesystem::create_directories(macros_dir);
+          macro_recording = std::make_unique<std::ofstream>(
+              macro_path(name), std::ios::trunc);
+          if (!macro_recording->is_open()) {
+            render::RenderError(
+                "macro",
+                std::format("could not open {}",
+                            macro_path(name)),
+                "", renderer);
+            macro_recording.reset();
+          } else {
+            *macro_recording << std::format(
+                "# einheit macro `{}`\n", name);
+            macro_recording_name = name;
+            std::cout << std::format(
+                "  recording `{}` — run `macro end` to stop\n",
+                name);
+          }
+        }
+      } else if (parsed->spec->path == "macro end") {
+        if (!macro_recording) {
+          render::RenderError("macro", "not recording", "",
+                              renderer);
+        } else {
+          std::cout << std::format(
+              "  saved macro `{}` → {}\n", macro_recording_name,
+              macro_path(macro_recording_name));
+          macro_recording.reset();
+          macro_recording_name.clear();
+        }
+      } else if (parsed->spec->path == "macro run") {
+        if (parsed->args.empty()) {
+          render::RenderError("macro",
+                              "usage: macro run <name>", "",
+                              renderer);
+        } else {
+          const auto name = parsed->args[0];
+          std::ifstream f(macro_path(name));
+          if (!f.is_open()) {
+            render::RenderError(
+                "macro",
+                std::format("no macro `{}` ({})", name,
+                            macro_path(name)),
+                "try: macro list", renderer);
+          } else {
+            // Collect the lines and dispatch them inline. Skip
+            // comments + empty.
+            std::vector<std::string> steps;
+            std::string mline;
+            while (std::getline(f, mline)) {
+              if (mline.empty() || mline[0] == '#') continue;
+              steps.push_back(mline);
+            }
+            std::cout << std::format(
+                "  running macro `{}` ({} steps)\n", name,
+                steps.size());
+            for (const auto &step : steps) {
+              std::cout << std::format("  > {}\n", step);
+              auto macro_tokens = Tokenize(step);
+              auto macro_parsed = Parse(s.tree, macro_tokens,
+                                         s.caller.role);
+              if (!macro_parsed) {
+                render::RenderError(
+                    "macro",
+                    std::format("step `{}`: {}", step,
+                                macro_parsed.error().message),
+                    "", renderer);
+                break;
+              }
+              auto mr = Dispatch(s, *macro_parsed);
+              if (!mr) {
+                render::RenderError(
+                    "macro",
+                    std::format("step `{}`: {}", step,
+                                mr.error().message),
+                    "", renderer);
+                break;
+              }
+              if (mr->response) {
+                std::ostringstream buf;
+                render::Renderer buffered(buf, s.caps,
+                                          renderer.Format(),
+                                          renderer.GetTheme());
+                try {
+                  s.adapter->RenderResponse(*macro_parsed->spec,
+                                             *mr->response,
+                                             buffered);
+                } catch (...) {}
+                std::cout << buf.str();
+              }
+            }
+          }
+        }
+      } else if (parsed->spec->path == "macro list") {
+        render::Table t;
+        render::AddColumn(t, "name", render::Align::Left,
+                          render::Priority::High);
+        render::AddColumn(t, "path", render::Align::Left,
+                          render::Priority::Medium);
+        if (std::filesystem::exists(macros_dir)) {
+          std::vector<std::string> names;
+          for (const auto &e :
+               std::filesystem::directory_iterator(macros_dir)) {
+            if (e.path().extension() == ".einheit") {
+              names.push_back(e.path().stem().string());
+            }
+          }
+          std::sort(names.begin(), names.end());
+          for (const auto &n : names) {
+            render::AddRow(t, {
+                render::Cell{n, render::Semantic::Emphasis},
+                render::Cell{macro_path(n),
+                             render::Semantic::Dim},
+            });
+          }
+        }
+        if (t.rows.empty()) {
+          std::cout << "  (no macros — try: macro record demo)\n";
+        } else {
+          render::RenderFormatted(t, renderer);
+        }
+      } else if (parsed->spec->path == "macro show") {
+        if (parsed->args.empty()) {
+          render::RenderError("macro",
+                              "usage: macro show <name>", "",
+                              renderer);
+        } else {
+          std::ifstream f(macro_path(parsed->args[0]));
+          if (!f.is_open()) {
+            render::RenderError(
+                "macro",
+                std::format("no macro `{}`", parsed->args[0]),
+                "", renderer);
+          } else {
+            std::string ml;
+            while (std::getline(f, ml)) std::cout << ml << '\n';
+          }
+        }
+      } else if (parsed->spec->path == "macro delete") {
+        if (parsed->args.empty()) {
+          render::RenderError("macro",
+                              "usage: macro delete <name>", "",
+                              renderer);
+        } else {
+          std::error_code ec;
+          if (std::filesystem::remove(
+                  macro_path(parsed->args[0]), ec)) {
+            std::cout << std::format("  removed macro `{}`\n",
+                                     parsed->args[0]);
+          } else {
+            render::RenderError(
+                "macro",
+                std::format("no macro `{}`", parsed->args[0]),
+                "", renderer);
           }
         }
       } else if (parsed->spec->path == "alias") {

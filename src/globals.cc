@@ -61,6 +61,13 @@ auto RegisterGlobals(CommandTree &tree)
       Make("theme use", "",
            "Switch to a named theme for the remainder of this "
            "session"),
+      Make("macro record", "",
+           "Start recording a macro; `macro end` stops"),
+      Make("macro end", "", "Stop recording the current macro"),
+      Make("macro run", "", "Replay a saved macro by name"),
+      Make("macro list", "", "List saved macros"),
+      Make("macro show", "", "Show the commands in a saved macro"),
+      Make("macro delete", "", "Remove a saved macro"),
       Make("configure", "configure",
            "Enter configure mode and open a candidate session",
            RoleGate::AdminOnly),
