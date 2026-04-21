@@ -12,6 +12,7 @@
 
 #include <chrono>
 #include <exception>
+#include <filesystem>
 #include <format>
 #include <iostream>
 #include <random>
@@ -299,8 +300,15 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
   Aliases aliases;
   if (auto a = LoadAliases(s.caller.user); a) aliases = *a;
   if (const auto yaml_path = DefaultYamlPath(); !yaml_path.empty()) {
-    if (auto y = LoadAliasesYaml(yaml_path); y) {
-      MergeAliases(aliases, *y);
+    if (std::filesystem::exists(yaml_path)) {
+      if (auto y = LoadAliasesYaml(yaml_path); y) {
+        MergeAliases(aliases, *y);
+      } else {
+        // Surface YAML parse errors — silent failure here bit us
+        // in a previous bug where the file was in the wrong HOME.
+        std::cerr << std::format("alias: {} ({})\n",
+                                 y.error().message, yaml_path);
+      }
     }
   }
 
@@ -462,6 +470,38 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
         auto tbl =
             schema::BuildSchema(s.adapter->GetSchema(), prefix);
         render::RenderFormatted(tbl, renderer);
+      } else if (parsed->spec->path == "alias") {
+        render::Table t;
+        render::AddColumn(t, "alias", render::Align::Left,
+                          render::Priority::High);
+        render::AddColumn(t, "expands to", render::Align::Left,
+                          render::Priority::High);
+        render::AddColumn(t, "help", render::Align::Left,
+                          render::Priority::Medium);
+        std::vector<std::string> keys;
+        keys.reserve(aliases.table.size());
+        for (const auto &[k, _] : aliases.table) {
+          keys.push_back(k);
+        }
+        std::sort(keys.begin(), keys.end());
+        for (const auto &k : keys) {
+          const auto help_it = aliases.help.find(k);
+          render::AddRow(t, {
+              render::Cell{k, render::Semantic::Emphasis},
+              render::Cell{aliases.table.at(k),
+                           render::Semantic::Info},
+              render::Cell{help_it != aliases.help.end()
+                               ? help_it->second
+                               : std::string{},
+                           render::Semantic::Dim},
+          });
+        }
+        if (keys.empty()) {
+          std::cout
+              << "  (no aliases — see ~/.einheit/aliases.yaml)\n";
+        } else {
+          render::RenderFormatted(t, renderer);
+        }
       }
       continue;
     }
