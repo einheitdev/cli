@@ -70,6 +70,17 @@ struct Shell {
     std::chrono::steady_clock::time_point start =
         std::chrono::steady_clock::now();
   } stats;
+
+  /// Transport health snapshot, updated on every Dispatch that
+  /// crosses the wire. Drives the status-bar connection chip.
+  struct Health {
+    /// True once at least one request has been acknowledged.
+    bool has_response = false;
+    /// Last observed wire round-trip time.
+    std::chrono::milliseconds last_rtt{0};
+    /// Last Dispatch result (ok / timeout / failed).
+    enum class Status { Ok, Timeout, Failed } status = Status::Ok;
+  } health;
 };
 
 /// Result of dispatching one accepted command line. Exposed so tests

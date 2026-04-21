@@ -48,6 +48,12 @@ auto RegisterGlobals(CommandTree &tree)
       // contacting the daemon.
       Make("show schema", "",
            "List every configurable path with type + help"),
+      Make("show env", "",
+           "Show terminal caps, active theme, aliases, target, "
+           "session"),
+      Make("doctor", "",
+           "Run framework health checks (transport, schema, theme, "
+           "keys)"),
       Make("configure", "configure",
            "Enter configure mode and open a candidate session",
            RoleGate::AdminOnly),

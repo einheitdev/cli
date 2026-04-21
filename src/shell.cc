@@ -81,6 +81,22 @@ auto StatusBar(const Shell &s, const render::Theme &theme)
   };
 
   std::vector<std::string> chips;
+  // Health chip: green ● when the last round-trip was fast, yellow
+  // when slow, red on timeout/failure, dim grey until the first
+  // exchange lands.
+  if (!s.health.has_response) {
+    chips.push_back(c(dim, "◌ waiting"));
+  } else if (s.health.status == Shell::Health::Status::Timeout) {
+    chips.push_back(c(bad, "⏱ timed out"));
+  } else if (s.health.status == Shell::Health::Status::Failed) {
+    chips.push_back(c(bad, "✗ transport"));
+  } else {
+    const auto ms = s.health.last_rtt.count();
+    const auto &chip_color =
+        ms > 200 ? warn : (ms > 50 ? dim : good);
+    chips.push_back(
+        c(chip_color, std::format("◉ {}ms", ms)));
+  }
   chips.push_back(
       c(dim, std::format("● {} cmds", s.stats.commands)));
   if (s.stats.commits > 0) {
@@ -220,11 +236,21 @@ auto Dispatch(Shell &s, const ParsedCommand &parsed)
 
   auto req = BuildRequest(parsed, s);
   using namespace std::chrono_literals;
+  const auto t0 = std::chrono::steady_clock::now();
   auto resp = s.tx->SendRequest(req, 30s);
+  s.health.last_rtt =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - t0);
   if (!resp) {
+    s.health.status =
+        resp.error().code == transport::TransportError::Timeout
+            ? Shell::Health::Status::Timeout
+            : Shell::Health::Status::Failed;
     return std::unexpected(
         MakeError(ShellError::LoopFailed, resp.error().message));
   }
+  s.health.has_response = true;
+  s.health.status = Shell::Health::Status::Ok;
 
   // Update session state on lifecycle verbs.
   if (resp->status == protocol::ResponseStatus::Ok) {
@@ -483,6 +509,89 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
         auto tbl =
             schema::BuildSchema(s.adapter->GetSchema(), prefix);
         render::RenderFormatted(tbl, renderer);
+      } else if (parsed->spec->path == "show env") {
+        render::Table t;
+        render::AddColumn(t, "field", render::Align::Left,
+                          render::Priority::High);
+        render::AddColumn(t, "value", render::Align::Left,
+                          render::Priority::High);
+        const auto add = [&](const std::string &k,
+                             const std::string &v,
+                             render::Semantic sem =
+                                 render::Semantic::Default) {
+          render::AddRow(t, {
+              render::Cell{k, render::Semantic::Emphasis},
+              render::Cell{v, sem},
+          });
+        };
+        add("colors",
+            s.caps.colors == render::ColorDepth::TrueColor
+                ? "truecolor"
+                : s.caps.colors == render::ColorDepth::Ansi256
+                      ? "256"
+                      : s.caps.colors == render::ColorDepth::Ansi16
+                            ? "16"
+                            : "none",
+            render::Semantic::Info);
+        add("unicode", s.caps.unicode ? "yes" : "no",
+            s.caps.unicode ? render::Semantic::Good
+                            : render::Semantic::Dim);
+        add("width", std::format("{}", s.caps.width));
+        add("height", std::format("{}", s.caps.height));
+        add("is_tty", s.caps.is_tty ? "yes" : "no");
+        add("target",
+            s.target_name.empty() ? "<local>" : s.target_name,
+            render::Semantic::Info);
+        add("user", s.caller.user);
+        add("configure",
+            s.session.in_configure ? "yes" : "no",
+            s.session.in_configure ? render::Semantic::Warn
+                                    : render::Semantic::Dim);
+        add("learning_mode", s.learning_mode ? "yes" : "no",
+            s.learning_mode ? render::Semantic::Warn
+                             : render::Semantic::Dim);
+        add("aliases",
+            std::format("{} loaded", aliases.table.size()));
+        add("history",
+            std::format("{} entries", history.entries.size()));
+        render::RenderFormatted(t, renderer);
+      } else if (parsed->spec->path == "doctor") {
+        render::Table t;
+        render::AddColumn(t, "check", render::Align::Left,
+                          render::Priority::High);
+        render::AddColumn(t, "result", render::Align::Left,
+                          render::Priority::High);
+        render::AddColumn(t, "detail", render::Align::Left,
+                          render::Priority::Medium);
+        const auto row = [&](const std::string &check, bool ok,
+                             const std::string &detail) {
+          render::AddRow(t, {
+              render::Cell{check, render::Semantic::Emphasis},
+              render::Cell{ok ? "✓ pass" : "✗ fail",
+                           ok ? render::Semantic::Good
+                              : render::Semantic::Bad},
+              render::Cell{detail, render::Semantic::Dim},
+          });
+        };
+        row("transport attached", s.tx != nullptr,
+            s.tx ? "ok" : "no transport");
+        row("adapter attached", s.adapter != nullptr,
+            s.adapter ? s.adapter->Metadata().id : "");
+        row("schema loaded",
+            !s.adapter->GetSchema().product.empty(),
+            s.adapter->GetSchema().product);
+        row("last round-trip",
+            s.health.has_response &&
+                s.health.status ==
+                    Shell::Health::Status::Ok,
+            s.health.has_response
+                ? std::format("{}ms", s.health.last_rtt.count())
+                : "no round-trip yet");
+        row("theme loaded", s.theme.has_value(),
+            s.theme ? "custom" : "default dark");
+        row("aliases loaded", !aliases.table.empty(),
+            std::format("{} entries", aliases.table.size()));
+        render::RenderFormatted(t, renderer);
       } else if (parsed->spec->path == "alias") {
         // `alias`                       → list
         // `alias <name> <expansion...>` → define or replace
