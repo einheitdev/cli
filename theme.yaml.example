@@ -15,4 +15,8 @@ info:     "#7DCFFF"     # sky blue — labels, neutral highlights
 # Chrome
 border:      "#3B4048"  # table + box borders
 accent:      "#7AA2F7"  # logo + prompt glyph
-prompt_user: "#565F89"  # user@target prefix dim
+
+# Prompt — user @ host rendered with three distinct colours
+prompt_user: "#BB9AF7"  # lavender — the `user` part
+prompt_at:   "#545C7E"  # dim slate — the `@` separator
+prompt_host: "#7DCFFF"  # sky blue — the host part

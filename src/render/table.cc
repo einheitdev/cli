@@ -187,16 +187,18 @@ auto BuildFtxuiTable(const Table &t, const TerminalCaps &caps,
   }
 
   ftxui::Table ftx(grid);
-  const auto border_style = caps.unicode ? LIGHT : EMPTY;
-  ftx.SelectAll().Border(border_style);
-  ftx.SelectAll().SeparatorVertical(border_style);
+  const auto line_style = caps.unicode ? LIGHT : EMPTY;
+  // No outer frame — feels lighter, especially on small tables.
+  // Keep only the inter-column verticals and a rule under the
+  // header row, the way `gh`, `kubectl`, and `docker` do.
+  ftx.SelectAll().SeparatorVertical(line_style);
   ftx.SelectRow(0).Decorate(bold);
-  ftx.SelectRow(0).SeparatorHorizontal(border_style);
+  ftx.SelectRow(0).SeparatorHorizontal(line_style);
   Element out = ftx.Render();
   if (!caps.force_plain && caps.colors != ColorDepth::None) {
-    // Stain the box-drawing with the border colour — the cell
-    // content keeps its own colours because FTXUI applies parent
-    // decorators only to undecorated children.
+    // Stain the separators with the border colour — cell content
+    // keeps its own colours because FTXUI applies parent decorators
+    // only to undecorated children.
     out = out | color(theme.border);
   }
   return out;

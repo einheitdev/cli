@@ -113,20 +113,33 @@ auto PromptFor(const Shell &s, const ProductMetadata &meta,
   const std::string host = s.target_name.empty()
                                ? meta.prompt
                                : s.target_name;
-  const std::string prefix =
-      s.caller.user.empty() ? host
-                             : std::format("{}@{}", s.caller.user,
-                                           host);
   const char glyph = s.session.in_configure ? '#' : '>';
+
   if (!color_ok) {
+    const std::string prefix =
+        s.caller.user.empty()
+            ? host
+            : std::format("{}@{}", s.caller.user, host);
     return std::format("{}{} ", prefix, glyph);
   }
+
   constexpr const char *kReset = "\x1b[0m";
   const auto user_color = render::FgAnsi(theme.prompt_user);
+  const auto at_color = render::FgAnsi(theme.prompt_at);
+  const auto host_color = render::FgAnsi(theme.prompt_host);
   const auto mode_color = render::FgAnsi(
       s.session.in_configure ? theme.warn : theme.accent);
-  return std::format("{}{}{} {}{}{} ", user_color, prefix, kReset,
-                     mode_color, glyph, kReset);
+
+  std::string prefix;
+  if (s.caller.user.empty()) {
+    prefix = std::format("{}{}{}", host_color, host, kReset);
+  } else {
+    prefix = std::format("{}{}{}{}@{}{}{}{}", user_color,
+                         s.caller.user, kReset, at_color, kReset,
+                         host_color, host, kReset);
+  }
+  return std::format("{} {}{}{} ", prefix, mode_color, glyph,
+                     kReset);
 }
 
 auto BuildRequest(const ParsedCommand &parsed, const Shell &s)

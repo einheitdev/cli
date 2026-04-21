@@ -108,7 +108,9 @@ auto DefaultDarkTrueColor() -> Theme {
   t.info        = Rgb(0x7DCFFF);  // sky blue — labels
   t.border      = Rgb(0x3B4048);  // muted steel
   t.accent      = Rgb(0x7AA2F7);  // periwinkle — logo + prompt glyph
-  t.prompt_user = Rgb(0x565F89);  // dimmer blue — user@host prefix
+  t.prompt_user = Rgb(0xBB9AF7);  // lavender — the `user` part
+  t.prompt_at   = Rgb(0x545C7E);  // dim slate — the `@` separator
+  t.prompt_host = Rgb(0x7DCFFF);  // sky blue — the host part
   return t;
 }
 
@@ -122,7 +124,9 @@ auto DefaultDarkAnsi() -> Theme {
   t.info        = ftxui::Color::CyanLight;
   t.border      = ftxui::Color::GrayLight;
   t.accent      = ftxui::Color::CyanLight;
-  t.prompt_user = ftxui::Color::GrayDark;
+  t.prompt_user = ftxui::Color::MagentaLight;
+  t.prompt_at   = ftxui::Color::GrayDark;
+  t.prompt_host = ftxui::Color::CyanLight;
   return t;
 }
 
@@ -139,7 +143,9 @@ auto DefaultLightTrueColor() -> Theme {
   t.info        = Rgb(0x0077AA);  // ocean blue
   t.border      = Rgb(0xC3C7D0);  // pale steel
   t.accent      = Rgb(0x3351A9);  // royal blue
-  t.prompt_user = Rgb(0x6A6F7A);  // mid-grey
+  t.prompt_user = Rgb(0x8839EF);  // royal purple — user
+  t.prompt_at   = Rgb(0x9AA0A6);  // mid grey — @
+  t.prompt_host = Rgb(0x005BAA);  // deep blue — host
   return t;
 }
 
@@ -153,7 +159,9 @@ auto DefaultLightAnsi() -> Theme {
   t.info        = ftxui::Color::Blue;
   t.border      = ftxui::Color::GrayDark;
   t.accent      = ftxui::Color::Blue;
-  t.prompt_user = ftxui::Color::GrayLight;
+  t.prompt_user = ftxui::Color::Magenta;
+  t.prompt_at   = ftxui::Color::GrayLight;
+  t.prompt_host = ftxui::Color::Blue;
   return t;
 }
 
@@ -223,6 +231,8 @@ auto LoadTheme(const std::string &path, Theme base)
     ReadColor(doc, "border", t.border);
     ReadColor(doc, "accent", t.accent);
     ReadColor(doc, "prompt_user", t.prompt_user);
+    ReadColor(doc, "prompt_at", t.prompt_at);
+    ReadColor(doc, "prompt_host", t.prompt_host);
     return t;
   } catch (const YAML::Exception &e) {
     return std::unexpected(

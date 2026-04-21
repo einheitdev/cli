@@ -36,7 +36,9 @@ struct Theme {
   ftxui::Color info;
   ftxui::Color border;
   ftxui::Color accent;       // logo + prompt glyph
-  ftxui::Color prompt_user;  // user@target prefix
+  ftxui::Color prompt_user;  // the `user` part of user@target
+  ftxui::Color prompt_at;    // the `@` separator
+  ftxui::Color prompt_host;  // the `target` / `host` part
 };
 
 /// Rich 24-bit dark palette — primary theme on dark terminals.
