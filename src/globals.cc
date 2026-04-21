@@ -54,6 +54,9 @@ auto RegisterGlobals(CommandTree &tree)
       Make("doctor", "",
            "Run framework health checks (transport, schema, theme, "
            "keys)"),
+      Make("explain", "",
+           "Show the wire representation + role + session "
+           "requirement for a command"),
       Make("configure", "configure",
            "Enter configure mode and open a candidate session",
            RoleGate::AdminOnly),

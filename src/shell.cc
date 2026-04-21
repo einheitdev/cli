@@ -424,16 +424,23 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
     reader->AddHistory(line);
 
     auto tokens = Tokenize(line);
+    // `time <cmd>` prefix — strip it, wrap the dispatch with a
+    // wall-clock timer and print the total at the end.
+    bool time_it = false;
+    if (tokens.size() >= 2 && tokens.front() == "time") {
+      time_it = true;
+      tokens.erase(tokens.begin());
+    }
+    const auto cmd_start = std::chrono::steady_clock::now();
+
     auto parsed = Parse(s.tree, tokens, s.caller.role);
     if (!parsed) {
       s.stats.errors += 1;
-      // Split "message — did you mean 'X'?" into message + hint so
-      // the suggestion lands on the yellow hint line of the box.
       std::string msg = parsed.error().message;
       std::string hint;
       if (const auto pos = msg.find(" — ");
           pos != std::string::npos) {
-        hint = msg.substr(pos + 5);  // skip " — "
+        hint = msg.substr(pos + 5);
         msg = msg.substr(0, pos);
       }
       render::RenderError("parse", msg, hint, renderer);
@@ -455,6 +462,17 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
     }
 
     auto result = Dispatch(s, *parsed);
+    // Retry-on-timeout: if the transport timed out, offer one
+    // interactive retry. Only prompts for prefix `Timeout` hints —
+    // other transport failures (auth, codec) are not retryable.
+    if (!result &&
+        s.health.status == Shell::Health::Status::Timeout) {
+      if (render::ConfirmPrompt(
+              "request timed out — retry with the same command?",
+              std::cout, std::cin, s.caps)) {
+        result = Dispatch(s, *parsed);
+      }
+    }
     if (result) {
       (void)Append(history, line);
       s.stats.commands += 1;
@@ -509,6 +527,67 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
         auto tbl =
             schema::BuildSchema(s.adapter->GetSchema(), prefix);
         render::RenderFormatted(tbl, renderer);
+      } else if (parsed->spec->path == "explain") {
+        if (parsed->args.empty()) {
+          render::RenderError("explain",
+                              "usage: explain <command-path>", "",
+                              renderer);
+        } else {
+          std::string target;
+          for (std::size_t i = 0; i < parsed->args.size(); ++i) {
+            if (i > 0) target += ' ';
+            target += parsed->args[i];
+          }
+          auto it = s.tree.by_path.find(target);
+          if (it == s.tree.by_path.end()) {
+            render::RenderError(
+                "explain",
+                std::format("no such command '{}'", target), "",
+                renderer);
+          } else {
+            const auto &sp = it->second;
+            render::Table t;
+            render::AddColumn(t, "field", render::Align::Left,
+                              render::Priority::High);
+            render::AddColumn(t, "value", render::Align::Left,
+                              render::Priority::High);
+            const auto add = [&](const std::string &k,
+                                 const std::string &v,
+                                 render::Semantic sem =
+                                     render::Semantic::Default) {
+              render::AddRow(t, {
+                  render::Cell{k, render::Semantic::Emphasis},
+                  render::Cell{v, sem},
+              });
+            };
+            add("path", sp.path, render::Semantic::Info);
+            add("wire_command",
+                sp.wire_command.empty() ? "<framework-local>"
+                                         : sp.wire_command,
+                sp.wire_command.empty() ? render::Semantic::Dim
+                                         : render::Semantic::Good);
+            add("role",
+                sp.role == RoleGate::AdminOnly         ? "admin"
+                : sp.role == RoleGate::OperatorOrAdmin ? "operator"
+                                                       : "any",
+                sp.role == RoleGate::AdminOnly
+                    ? render::Semantic::Warn
+                    : render::Semantic::Dim);
+            add("requires_session",
+                sp.requires_session ? "yes" : "no",
+                sp.requires_session ? render::Semantic::Warn
+                                     : render::Semantic::Dim);
+            add("args", std::format("{}", sp.args.size()));
+            // Sketch of the wire envelope.
+            std::string envelope = std::format(
+                R"({{"command":"{}","args":[...],"session_id":{}}})",
+                sp.wire_command.empty() ? "<local>"
+                                         : sp.wire_command,
+                sp.requires_session ? "\"<sid>\"" : "null");
+            add("envelope", envelope, render::Semantic::Info);
+            render::RenderFormatted(t, renderer);
+          }
+        }
       } else if (parsed->spec->path == "show env") {
         render::Table t;
         render::AddColumn(t, "field", render::Align::Left,
@@ -688,6 +767,26 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
         std::cerr << "render: " << e.what() << '\n';
       }
       render::Flush(buf.str(), s.caps);
+    }
+
+    if (time_it) {
+      const auto elapsed =
+          std::chrono::steady_clock::now() - cmd_start;
+      const auto total_ms =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              elapsed)
+              .count();
+      const auto wire_ms = s.health.last_rtt.count();
+      const bool color_ok =
+          !s.caps.force_plain &&
+          s.caps.colors != render::ColorDepth::None;
+      const auto dim = color_ok
+                           ? render::FgAnsi(theme.dim)
+                           : std::string();
+      constexpr const char *kReset = "\x1b[0m";
+      std::cout << std::format(
+          "{}  time: {}ms total, {}ms wire{}\n",
+          dim, total_ms, wire_ms, kReset);
     }
   }
 
