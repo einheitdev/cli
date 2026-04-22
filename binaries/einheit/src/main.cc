@@ -54,13 +54,21 @@ auto ParseFormat(const std::string &s)
 // through the adapter's socket paths; non-empty => resolve against
 // ~/.einheit/config and open a CurveZMQ tcp:// transport.
 auto MakeTransport(const einheit::cli::ProductAdapter &adapter,
-                   const std::string &target_name)
+                   const std::string &target_name,
+                   const std::string &endpoint_override,
+                   const std::string &event_override)
     -> std::unique_ptr<einheit::cli::transport::Transport> {
   using namespace einheit::cli;
   if (target_name.empty()) {
     transport::ZmqLocalConfig cfg;
-    cfg.control_endpoint = adapter.ControlSocketPath();
-    cfg.event_endpoint = adapter.EventSocketPath();
+    cfg.control_endpoint =
+        endpoint_override.empty()
+            ? adapter.ControlSocketPath()
+            : endpoint_override;
+    cfg.event_endpoint =
+        event_override.empty()
+            ? adapter.EventSocketPath()
+            : event_override;
     auto tx = transport::NewZmqLocalTransport(cfg);
     if (!tx) {
       std::cerr << std::format("transport setup: {}\n",
@@ -326,6 +334,14 @@ auto main(int argc, char **argv) -> int {
   std::string adapter_name = "example";
   app.add_option("--adapter", adapter_name,
                  "Product adapter: example | hd-relay");
+  std::string endpoint_override;
+  std::string event_endpoint_override;
+  app.add_option(
+      "--endpoint", endpoint_override,
+      "Override control ZMQ endpoint (local IPC only)");
+  app.add_option(
+      "--event-endpoint", event_endpoint_override,
+      "Override event ZMQ endpoint (local IPC only)");
 
   // Client-side subcommands that don't need a transport.
   auto *key_cmd = app.add_subcommand(
@@ -414,7 +430,9 @@ auto main(int argc, char **argv) -> int {
     }
     tx = std::move(*built);
   } else {
-    tx = MakeTransport(*adapter, target);
+    tx = MakeTransport(*adapter, target,
+                        endpoint_override,
+                        event_endpoint_override);
     if (!tx) return 1;
   }
 
