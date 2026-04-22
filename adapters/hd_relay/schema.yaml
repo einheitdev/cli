@@ -1,0 +1,261 @@
+# Hyper-DERP relay configuration schema.
+#
+# Drives `set` validation and tab completion in the einheit CLI
+# learning mode, and documents the daemon's configurable surface.
+# Matches the YAML config consumed by the hyper-derp binary at
+# /home/karl/dev/Hyper-DERP/dist/hyper-derp.yaml.
+version: 1
+product: hd-relay
+
+config:
+  port:
+    type: integer
+    range: [1, 65535]
+    default: "3340"
+    help: "DERP / HD listen port"
+
+  workers:
+    type: integer
+    range: [0, 32]
+    default: "0"
+    help: "Data-plane worker threads (0 = hardware_concurrency)"
+
+  pin_cores:
+    type: list
+    item:
+      type: integer
+      range: [0, 255]
+    help: "CPU cores to pin workers to (optional)"
+
+  sqpoll:
+    type: boolean
+    default: "false"
+    help: "Enable io_uring SQPOLL (requires CAP_SYS_NICE)"
+
+  sockbuf:
+    type: integer
+    range: [0, 268435456]
+    default: "0"
+    help: "Per-socket SO_SNDBUF/SO_RCVBUF in bytes (0 = OS default)"
+
+  max_accept_rate:
+    type: integer
+    range: [0, 1000000]
+    default: "0"
+    help: "Accepted connections per second cap (0 = unlimited)"
+
+  tls_cert:
+    type: string
+    help: "Path to kTLS certificate (PEM)"
+    example: "/etc/hyper-derp/cert.pem"
+
+  tls_key:
+    type: string
+    help: "Path to kTLS private key (PEM)"
+    example: "/etc/hyper-derp/key.pem"
+
+  log_level:
+    type: enum
+    values: [debug, info, warn, error]
+    default: "info"
+    help: "spdlog level"
+
+  metrics:
+    type: object
+    fields:
+      port:
+        type: integer
+        range: [0, 65535]
+        default: "0"
+        help: "Metrics HTTP port (0 = disabled)"
+      tls_cert:
+        type: string
+        help: "Metrics HTTPS certificate (optional)"
+      tls_key:
+        type: string
+        help: "Metrics HTTPS key (optional)"
+      debug_endpoints:
+        type: boolean
+        default: "false"
+        help: "Expose /debug/workers and /debug/peers"
+
+  hd:
+    type: object
+    fields:
+      relay_key:
+        type: string
+        help: "rk_<64 hex> or raw 64-char hex — HD enrollment secret"
+        example: "rk_aabbcc..."
+      relay_id:
+        type: integer
+        range: [0, 65535]
+        default: "0"
+        help: "Fleet identifier for this relay (0 = standalone)"
+      enroll_mode:
+        type: enum
+        values: [manual, auto]
+        default: "manual"
+        help: "Accept new peers manually via admin API or auto-approve"
+      seed_relays:
+        type: list
+        item:
+          type: string
+        help: "host:port seed entries for fleet bootstrap"
+      denylist_path:
+        type: string
+        help: "Persistent revoked-key file (empty = in-memory only)"
+      peer_policy_path:
+        type: string
+        help: "Persistent per-peer routing-policy file"
+      fleet_policy_path:
+        type: string
+        help: "Static fleet policy YAML (superseded by fleet_controller)"
+      audit_log_path:
+        type: string
+        help: "Routing-policy audit log file (LD-JSON)"
+      audit_log_max_bytes:
+        type: integer
+        range: [0, 2000000000]
+        default: "100000000"
+        help: "Rotate audit log at this size"
+      audit_log_keep:
+        type: integer
+        range: [1, 100]
+        default: "10"
+        help: "Rotated audit-log files to retain (.1..N)"
+
+      enrollment:
+        type: object
+        fields:
+          max_peers:
+            type: integer
+            range: [0, 100000]
+            help: "Auto-approve cap"
+          require_ip_range:
+            type: string
+            help: "CIDR restricting auto-approval (IPv4)"
+            example: "10.0.0.0/8"
+          allowed_keys:
+            type: list
+            item:
+              type: string
+            help: "Glob patterns matched against ck_ prefixed keys"
+
+      relay_policy:
+        type: object
+        fields:
+          forbid_direct:
+            type: boolean
+            default: "false"
+            help: "Deny Mode::Direct on this relay"
+          forbid_relayed:
+            type: boolean
+            default: "false"
+            help: "Deny Mode::Relayed on this relay"
+          max_direct_peers:
+            type: integer
+            range: [0, 1000000]
+            default: "0"
+            help: "Concurrent-direct-tunnel cap (0 = unlimited)"
+          audit_relayed_traffic:
+            type: boolean
+            default: "true"
+            help: "Log relayed decisions to the audit log"
+          default_mode:
+            type: enum
+            values:
+              [prefer_direct, require_direct,
+               prefer_relay, require_relay]
+            default: "prefer_direct"
+            help: "Fallback intent when no peer/client pin applies"
+
+      federation:
+        type: object
+        fields:
+          fleet_id:
+            type: string
+            help: "This relay's fleet id (FleetOpenConnection origin)"
+          accept_from:
+            type: list
+            item:
+              type: object
+              fields:
+                fleet_id:
+                  type: string
+                  help: "Remote fleet id glob (trailing * allowed)"
+                allowed_destinations:
+                  type: list
+                  item:
+                    type: string
+                  help: "Target-key globs (ck_... or raw hex)"
+          reject_from:
+            type: list
+            item:
+              type: string
+            help: "Hard-deny fleet-id globs; checked first"
+
+      fleet_controller:
+        type: object
+        fields:
+          url:
+            type: string
+            help: "HTTPS URL of the policy server"
+            example: "https://fleet.example.com"
+          signing_pubkey_b64:
+            type: string
+            help: "Ed25519 bundle-verify public key (base64)"
+          client_cert:
+            type: string
+            help: "mTLS client certificate (PEM)"
+          client_key:
+            type: string
+            help: "mTLS client key (PEM)"
+          ca_bundle:
+            type: string
+            help: "CA bundle for server-cert verification"
+          poll_interval_secs:
+            type: integer
+            range: [10, 3600]
+            default: "60"
+            help: "Bundle poll cadence (±10s jitter)"
+          bundle_cache_path:
+            type: string
+            help: "Last-known-good bundle cache path"
+
+  level2:
+    type: object
+    fields:
+      enabled:
+        type: boolean
+        default: "false"
+        help: "Enable ICE / STUN / TURN for Level 2 direct paths"
+      stun_port:
+        type: integer
+        range: [1, 65535]
+        default: "3478"
+      xdp_interface:
+        type: string
+        help: "NIC to attach the XDP program to (e.g. eth0)"
+      turn:
+        type: object
+        fields:
+          realm:
+            type: string
+            help: "TURN realm"
+            example: "relay.example.com"
+          max_allocations:
+            type: integer
+            range: [0, 1000000]
+            default: "10000"
+          default_lifetime:
+            type: integer
+            range: [0, 86400]
+            default: "600"
+
+  peer_rate_limit:
+    type: integer
+    range: [0, 10000000000]
+    default: "0"
+    help: "Per-peer recv byte/s rate limit (0 = unlimited)"
+
+types: {}

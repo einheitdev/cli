@@ -10,6 +10,7 @@ target_link_libraries(einheit
   PRIVATE
     einheit_cli
     einheit_adapter_example
+    einheit_adapter_hd_relay
 )
 
 set_target_properties(einheit PROPERTIES

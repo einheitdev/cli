@@ -15,6 +15,7 @@
 #include <CLI/CLI.hpp>
 
 #include "adapters/example/adapter.h"
+#include "adapters/hd_relay/adapter.h"
 #include "einheit/cli/command_tree.h"
 #include "einheit/cli/curve_keys.h"
 #include "einheit/cli/globals.h"
@@ -322,6 +323,9 @@ auto main(int argc, char **argv) -> int {
   bool status_bar_flag = false;
   app.add_flag("--status-bar", status_bar_flag,
                "Show a live status-chips line above the prompt");
+  std::string adapter_name = "example";
+  app.add_option("--adapter", adapter_name,
+                 "Product adapter: example | hd-relay");
 
   // Client-side subcommands that don't need a transport.
   auto *key_cmd = app.add_subcommand(
@@ -367,7 +371,17 @@ auto main(int argc, char **argv) -> int {
   ov.width = static_cast<std::uint16_t>(width);
   const auto caps = render::ApplyOverrides(render::DetectTerminal(), ov);
 
-  auto adapter = einheit::adapters::example::NewExampleAdapter();
+  std::unique_ptr<einheit::cli::ProductAdapter> adapter;
+  if (adapter_name == "hd-relay") {
+    adapter = einheit::adapters::hd_relay::NewHdRelayAdapter();
+  } else if (adapter_name == "example" || adapter_name.empty()) {
+    adapter = einheit::adapters::example::NewExampleAdapter();
+  } else {
+    std::cerr << std::format(
+        "unknown adapter '{}' — try 'example' or 'hd-relay'\n",
+        adapter_name);
+    return 1;
+  }
 
   // Learning mode: spawn an in-process daemon and point the transport
   // at its tmpdir ipc:// socket. The daemon validates set/delete
