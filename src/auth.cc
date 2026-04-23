@@ -7,9 +7,22 @@
 #include <pwd.h>
 #include <unistd.h>
 
+#include <cstdlib>
 #include <string>
+#include <string_view>
 
 namespace einheit::cli::auth {
+
+namespace {
+auto RoleFromEnv() -> RoleGate {
+  const char *v = std::getenv("EINHEIT_ROLE");
+  if (!v || !*v) return RoleGate::AnyAuthenticated;
+  std::string_view s{v};
+  if (s == "admin") return RoleGate::AdminOnly;
+  if (s == "operator") return RoleGate::OperatorOrAdmin;
+  return RoleGate::AnyAuthenticated;
+}
+}  // namespace
 
 auto ResolveLocal()
     -> std::expected<CallerIdentity, Error<AuthError>> {
@@ -23,8 +36,9 @@ auto ResolveLocal()
   id.user = pw->pw_name;
   // Role mapping comes from daemon config; default to read-only
   // until the daemon responds. Daemon re-stamps the authoritative
-  // role on each Response.
-  id.role = RoleGate::AnyAuthenticated;
+  // role on each Response. EINHEIT_ROLE (admin|operator|any) opts
+  // the local caller into a higher gate for local-IPC scenarios.
+  id.role = RoleFromEnv();
   id.transport = ::isatty(STDIN_FILENO) ? "tty" : "pipe";
   return id;
 }

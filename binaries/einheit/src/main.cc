@@ -4,6 +4,7 @@
 /// up the example adapter, and hands off to RunShell or RunOneshot.
 // Copyright (c) 2026 Einheit Networks
 
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <format>
@@ -342,6 +343,11 @@ auto main(int argc, char **argv) -> int {
   app.add_option(
       "--event-endpoint", event_endpoint_override,
       "Override event ZMQ endpoint (local IPC only)");
+  std::string role_override;
+  app.add_option(
+      "--role", role_override,
+      "Local-IPC caller role: admin | operator | any "
+      "(also honors EINHEIT_ROLE env)");
 
   // Client-side subcommands that don't need a transport.
   auto *key_cmd = app.add_subcommand(
@@ -365,6 +371,17 @@ auto main(int argc, char **argv) -> int {
     app.parse(argc, argv);
   } catch (const CLI::ParseError &e) {
     return app.exit(e);
+  }
+
+  // --role forwards into EINHEIT_ROLE so auth::ResolveLocal picks
+  // it up regardless of which code path invokes it.
+  if (!role_override.empty()) {
+    if (role_override != "admin" && role_override != "operator" &&
+        role_override != "any") {
+      std::cerr << "--role: expected admin|operator|any\n";
+      return 1;
+    }
+    ::setenv("EINHEIT_ROLE", role_override.c_str(), 1);
   }
 
   if (*key_gen) return HandleKeyGenerate(key_name);
