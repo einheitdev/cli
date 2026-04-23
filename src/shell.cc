@@ -256,7 +256,8 @@ auto Dispatch(Shell &s, const ParsedCommand &parsed)
     } else if (spec.wire_command == "commit" ||
                spec.path == "rollback candidate") {
       ClearSession(s.session);
-    } else if (spec.wire_command == "rollback") {
+    } else if (spec.wire_command == "rollback" ||
+               spec.wire_command == "rollback_previous") {
       // rollback previous / rollback to N don't touch the session.
     }
   }
@@ -542,7 +543,9 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
           result->response &&
           result->response->status == protocol::ResponseStatus::Ok) {
         s.stats.commits += 1;
-      } else if (parsed->spec->wire_command == "rollback" &&
+      } else if ((parsed->spec->wire_command == "rollback" ||
+                  parsed->spec->wire_command ==
+                      "rollback_previous") &&
                  result->response &&
                  result->response->status ==
                      protocol::ResponseStatus::Ok) {

@@ -79,7 +79,12 @@ auto RegisterGlobals(CommandTree &tree)
       Make("rollback candidate", "rollback",
            "Discard the candidate session", RoleGate::AdminOnly,
            true),
-      Make("rollback previous", "rollback",
+      // Distinct wire verb so the daemon can tell `rollback
+      // previous` apart from `rollback candidate` — the shell
+      // strips path tokens that don't correspond to argument
+      // slots, so otherwise both arrive as `rollback` with
+      // empty args.
+      Make("rollback previous", "rollback_previous",
            "Roll back to the previous commit", RoleGate::AdminOnly),
       Make("set", "set",
            "Set a candidate-config value at a schema path",
