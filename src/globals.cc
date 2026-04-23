@@ -92,6 +92,10 @@ auto RegisterGlobals(CommandTree &tree)
       Make("delete", "delete",
            "Remove a candidate-config value at a schema path",
            RoleGate::AdminOnly, true),
+      // Service control wire verbs (`daemon restart`,
+      // `daemon stop`) are no longer declared here — the
+      // daemon advertises them through its `describe`
+      // handshake, and the CLI picks them up at startup.
 
       // Framework-local verbs (no wire round trip). The shell
       // intercepts these before dispatch; wire_command is left
@@ -108,6 +112,17 @@ auto RegisterGlobals(CommandTree &tree)
       Make("logs", "", "Print daemon logs; use `logs --follow`"),
       Make("shell", "", "Drop to a POSIX shell (audit-logged)",
            RoleGate::AdminOnly),
+      // Local-only counterparts to the daemon-owned
+      // `daemon restart` / `daemon stop`. Start can't be
+      // a wire verb (the daemon is stopped by definition
+      // when you'd need it); status is cheap enough to
+      // answer from `systemctl --user` without a wire
+      // round-trip.
+      Make("daemon start", "",
+           "Start the daemon via systemd (local only)",
+           RoleGate::AdminOnly),
+      Make("daemon status", "",
+           "Show the service's systemd status (local only)"),
   };
 
   for (const auto &g : globals) {

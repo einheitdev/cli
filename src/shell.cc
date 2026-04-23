@@ -10,7 +10,10 @@
 
 #include "einheit/cli/shell.h"
 
+#include <sys/wait.h>
+
 #include <chrono>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <format>
@@ -218,6 +221,25 @@ auto Dispatch(Shell &s, const ParsedCommand &parsed)
       } else {
         out.exit_shell = true;
       }
+      return out;
+    }
+    // Service control on the local host. Works even when
+    // the daemon is unreachable, which is the point —
+    // the wire-verb `daemon restart` / `daemon stop`
+    // pair can't cover the stopped-daemon case.
+    if (spec.path == "daemon start") {
+      int rc = std::system(
+          "systemctl --user start hyper-derp");
+      std::cout << std::format(
+          "  systemctl exited with {}\n",
+          WIFEXITED(rc) ? WEXITSTATUS(rc) : -1);
+      return out;
+    }
+    if (spec.path == "daemon status") {
+      (void)std::system(
+          "systemctl --user status hyper-derp "
+          "--no-pager");
+      return out;
     }
     return out;
   }
@@ -266,6 +288,117 @@ auto Dispatch(Shell &s, const ParsedCommand &parsed)
   return out;
 }
 
+// -- Capability handshake ----------------------------------
+
+namespace {
+
+// Strip leading whitespace, return the suffix after the
+// first `=`. Returns nullopt if no `=` present.
+auto SplitKv(const std::string &line)
+    -> std::optional<std::pair<std::string, std::string>> {
+  auto eq = line.find('=');
+  if (eq == std::string::npos) return std::nullopt;
+  return std::make_pair(line.substr(0, eq),
+                        line.substr(eq + 1));
+}
+
+// Pull the whole body (UTF-8 key=value lines) into a
+// map keyed by the fully-dotted key.
+auto ParseKv(const std::vector<std::uint8_t> &body)
+    -> std::unordered_map<std::string, std::string> {
+  std::unordered_map<std::string, std::string> m;
+  std::string acc;
+  auto commit = [&]() {
+    if (acc.empty()) return;
+    if (auto p = SplitKv(acc)) {
+      m.emplace(std::move(p->first), std::move(p->second));
+    }
+    acc.clear();
+  };
+  for (auto c : body) {
+    if (c == '\n') { commit(); continue; }
+    acc.push_back(static_cast<char>(c));
+  }
+  commit();
+  return m;
+}
+
+auto RoleFromString(const std::string &s) -> RoleGate {
+  if (s == "admin") return RoleGate::AdminOnly;
+  if (s == "operator") return RoleGate::OperatorOrAdmin;
+  return RoleGate::AnyAuthenticated;
+}
+
+// Build CommandSpecs out of the key=value catalog the
+// daemon returned. Commands whose `path` collides with a
+// locally-registered spec are skipped so framework verbs
+// and adapter-local rendering stay authoritative.
+auto MergeCatalog(CommandTree &tree,
+                   const std::unordered_map<std::string,
+                                             std::string>
+                       &kv) -> int {
+  auto get = [&](const std::string &k) -> std::string {
+    auto it = kv.find(k);
+    return it == kv.end() ? std::string() : it->second;
+  };
+  int count = 0;
+  try {
+    count = std::stoi(get("count"));
+  } catch (...) {
+    return 0;
+  }
+  int merged = 0;
+  for (int i = 0; i < count; ++i) {
+    const auto prefix = std::format("cmd.{}.", i);
+    CommandSpec spec;
+    spec.path = get(prefix + "path");
+    spec.wire_command = get(prefix + "wire");
+    spec.help = get(prefix + "help");
+    spec.role = RoleFromString(get(prefix + "role"));
+    spec.requires_session =
+        get(prefix + "requires_session") == "true";
+    if (spec.path.empty()) continue;
+    if (tree.by_path.contains(spec.path)) continue;
+
+    int arg_count = 0;
+    try {
+      arg_count = std::stoi(get(prefix + "arg_count"));
+    } catch (...) {
+      arg_count = 0;
+    }
+    for (int a = 0; a < arg_count; ++a) {
+      const auto ap = std::format(
+          "{}arg.{}.", prefix, a);
+      ArgSpec arg;
+      arg.name = get(ap + "name");
+      arg.help = get(ap + "help");
+      arg.required = get(ap + "required") == "true";
+      spec.args.push_back(std::move(arg));
+    }
+    (void)Register(tree, spec);
+    merged++;
+  }
+  return merged;
+}
+
+// Ask the daemon for its catalog and register anything
+// unknown. Silent-fail: an older daemon that doesn't
+// implement `describe` just means the tree stays as it
+// came from globals + adapter.
+auto HandshakeCatalog(Shell &s) -> int {
+  if (!s.tx) return 0;
+  protocol::Request req;
+  req.id = NewRequestId();
+  req.command = "describe";
+  audit::StampIdentity(s.caller, req.user, req.role);
+  auto resp = s.tx->SendRequest(req, std::chrono::seconds(2));
+  if (!resp) return 0;
+  if (resp->status != protocol::ResponseStatus::Ok) return 0;
+  return MergeCatalog(s.tree, ParseKv(resp->data));
+}
+
+}  // namespace
+
 auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
   if (!s.tx || !s.adapter) {
     return std::unexpected(MakeError(
@@ -278,6 +411,18 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
           MakeError(ShellError::LoopFailed, caller.error().message));
     }
     s.caller = *caller;
+  }
+
+  // Pull the daemon's command catalog. Anything not
+  // already registered by the framework or the adapter
+  // gets added to the tree so a daemon that learned a
+  // new verb is immediately visible.
+  const int merged = HandshakeCatalog(s);
+  if (std::getenv("EINHEIT_HANDSHAKE_VERBOSE")) {
+    std::cerr << std::format(
+        "  handshake: merged {} new commands from daemon "
+        "catalog\n",
+        merged);
   }
 
   const auto meta = s.adapter->Metadata();
@@ -513,7 +658,9 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
     // Destructive verbs get a yellow confirmation prompt.
     if (parsed->spec->path == "rollback previous" ||
         parsed->spec->path == "shell" ||
-        parsed->spec->path == "delete") {
+        parsed->spec->path == "delete" ||
+        parsed->spec->path == "daemon restart" ||
+        parsed->spec->path == "daemon stop") {
       const auto msg =
           std::format("about to run `{}` — this cannot be undone.",
                       parsed->spec->path);
@@ -1198,6 +1345,17 @@ auto RunOneshot(Shell &s, const std::vector<std::string> &tokens)
           MakeError(ShellError::LoopFailed, caller.error().message));
     }
     s.caller = *caller;
+  }
+
+  // Same handshake as RunShell so one-shot invocations can
+  // dispatch verbs added by the daemon without a hardcoded
+  // adapter entry.
+  const int merged = HandshakeCatalog(s);
+  if (std::getenv("EINHEIT_HANDSHAKE_VERBOSE")) {
+    std::cerr << std::format(
+        "  handshake: merged {} new commands from daemon "
+        "catalog\n",
+        merged);
   }
 
   auto parsed = Parse(s.tree, tokens, s.caller.role);
