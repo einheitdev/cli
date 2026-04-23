@@ -29,10 +29,16 @@ auto MakeError(TransportError code, std::string message)
 
 class ZmqLocalTransport : public Transport {
  public:
+  // DEALER rather than REQ: REQ's lock-step state machine
+  // wedges if a daemon restart drops an in-flight reply,
+  // and DEALER is the canonical pair for the daemon's
+  // ROUTER anyway. We preserve the `[empty][body]`
+  // framing REQ used so the daemon side doesn't have to
+  // special-case transports.
   explicit ZmqLocalTransport(ZmqLocalConfig cfg)
       : cfg_(std::move(cfg)),
         ctx_(1),
-        ctrl_sock_(ctx_, zmq::socket_type::req) {}
+        ctrl_sock_(ctx_, zmq::socket_type::dealer) {}
 
   ~ZmqLocalTransport() override { Disconnect(); }
 
@@ -82,6 +88,12 @@ class ZmqLocalTransport : public Transport {
 
     try {
       std::lock_guard<std::mutex> lk(ctrl_mu_);
+      // DEALER doesn't auto-insert the empty delimiter
+      // REQ had; the daemon's ROUTER expects
+      // [identity][empty][body], so we send the empty
+      // frame ourselves.
+      zmq::message_t empty;
+      ctrl_sock_.send(empty, zmq::send_flags::sndmore);
       zmq::message_t frame(encoded->data(), encoded->size());
       ctrl_sock_.send(frame, zmq::send_flags::none);
 
@@ -94,6 +106,16 @@ class ZmqLocalTransport : public Transport {
             MakeError(TransportError::Timeout, "request timed out"));
       }
 
+      // Discard the matching empty delimiter before the
+      // payload frame.
+      zmq::message_t delim;
+      auto got_delim =
+          ctrl_sock_.recv(delim, zmq::recv_flags::none);
+      if (!got_delim) {
+        return std::unexpected(MakeError(
+            TransportError::ReceiveFailed,
+            "recv delimiter returned empty"));
+      }
       zmq::message_t reply;
       auto got = ctrl_sock_.recv(reply, zmq::recv_flags::none);
       if (!got) {

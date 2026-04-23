@@ -58,10 +58,15 @@ auto ApplyClientCurveKeys(zmq::socket_t &sock,
 
 class ZmqRemoteTransport : public Transport {
  public:
+  // DEALER rather than REQ — same rationale as the local
+  // transport: REQ's state machine can't recover from a
+  // dropped reply after a daemon restart, and DEALER is
+  // the canonical pair for ROUTER. Framing preserved so
+  // the daemon side stays transport-agnostic.
   explicit ZmqRemoteTransport(ZmqRemoteConfig cfg)
       : cfg_(std::move(cfg)),
         ctx_(1),
-        ctrl_sock_(ctx_, zmq::socket_type::req) {}
+        ctrl_sock_(ctx_, zmq::socket_type::dealer) {}
 
   ~ZmqRemoteTransport() override { Disconnect(); }
 
@@ -112,6 +117,11 @@ class ZmqRemoteTransport : public Transport {
 
     try {
       std::lock_guard<std::mutex> lk(ctrl_mu_);
+      // DEALER→ROUTER framing: empty delimiter ahead of
+      // the payload, matching what REQ used to insert
+      // automatically.
+      zmq::message_t empty;
+      ctrl_sock_.send(empty, zmq::send_flags::sndmore);
       zmq::message_t frame(encoded->data(), encoded->size());
       ctrl_sock_.send(frame, zmq::send_flags::none);
 
@@ -125,6 +135,14 @@ class ZmqRemoteTransport : public Transport {
             MakeError(TransportError::Timeout, "request timed out"));
       }
 
+      zmq::message_t delim;
+      auto got_delim =
+          ctrl_sock_.recv(delim, zmq::recv_flags::none);
+      if (!got_delim) {
+        return std::unexpected(MakeError(
+            TransportError::ReceiveFailed,
+            "recv delimiter returned empty"));
+      }
       zmq::message_t reply;
       auto got = ctrl_sock_.recv(reply, zmq::recv_flags::none);
       if (!got) {
