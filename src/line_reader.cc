@@ -143,8 +143,14 @@ class ReplxxReader : public LineReader {
     }
     auto candidates = help_fn_(preceding, partial);
 
+    // Lead with CR + ESC[K so the overlay starts at column
+    // 0 and the prompt line we were typing on gets cleared
+    // before the block; replxx redraws the prompt + buffer
+    // after we return, which otherwise starts wherever the
+    // cursor happened to be and renders as an indented
+    // orphan.
     std::string block;
-    block += "\n";
+    block += "\r\x1b[K\n";
     if (candidates.empty()) {
       block += "  (no candidates)\n";
     } else {

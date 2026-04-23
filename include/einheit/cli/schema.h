@@ -137,6 +137,18 @@ auto Completions(const Schema &schema,
                  const std::string &partial_path)
     -> std::vector<std::string>;
 
+/// Value-completion candidates for a fully-resolved leaf path.
+/// Used by `set <path> <tab>` to offer enum members and boolean
+/// literals. Returns an empty vector for types without a finite
+/// value set (string, integer, cidr, custom).
+/// @param schema Schema to walk.
+/// @param path Fully-resolved dotted path to a leaf.
+/// @param partial Partial value the user has typed so far.
+auto ValueCompletions(const Schema &schema,
+                       const std::string &path,
+                       const std::string &partial)
+    -> std::vector<std::string>;
+
 /// Walk every leaf and container in the schema and return a plain-
 /// text description: path, type (with range / enum values / format),
 /// default, and help text. Kept for tests + doc generation.

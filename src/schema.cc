@@ -510,6 +510,29 @@ auto BuildSchema(const Schema &schema, const std::string &prefix)
   return t;
 }
 
+auto ValueCompletions(const Schema &schema,
+                       const std::string &path,
+                       const std::string &partial)
+    -> std::vector<std::string> {
+  const Node *n = Resolve(schema, path);
+  if (!n) return {};
+  auto *ps = std::get_if<PrimitiveSpec>(&n->shape);
+  if (!ps) return {};
+  std::vector<std::string> out;
+  if (ps->type == PrimitiveType::EnumStr) {
+    for (const auto &v : ps->values) {
+      if (v.rfind(partial, 0) == 0) out.push_back(v);
+    }
+  } else if (ps->type == PrimitiveType::Boolean) {
+    for (const char *v : {"true", "false"}) {
+      std::string s(v);
+      if (s.rfind(partial, 0) == 0) out.push_back(std::move(s));
+    }
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
 auto Completions(const Schema &schema,
                  const std::string &partial_path)
     -> std::vector<std::string> {

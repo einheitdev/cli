@@ -331,6 +331,16 @@ auto SuggestCompletions(const CommandTree &tree,
   if (is_set_path || is_delete_path) {
     return schema::Completions(schema, partial);
   }
+  // `set <path> <value>` — value completion pulls enum members /
+  // booleans out of the schema so the operator doesn't have to
+  // remember legal values. Non-finite types (string, integer,
+  // cidr, custom) fall through to an empty list.
+  const bool is_set_value =
+      preceding.size() == 2 && preceding[0] == "set";
+  if (is_set_value) {
+    return schema::ValueCompletions(schema, preceding[1],
+                                     partial);
+  }
   return SuggestCompletions(tree, preceding, partial);
 }
 
