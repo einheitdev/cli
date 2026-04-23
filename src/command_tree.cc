@@ -333,13 +333,18 @@ auto SuggestCompletions(const CommandTree &tree,
   }
   // `set <path> <value>` — value completion pulls enum members /
   // booleans out of the schema so the operator doesn't have to
-  // remember legal values. Non-finite types (string, integer,
-  // cidr, custom) fall through to an empty list.
+  // remember legal values. When `<path>` names a container (not
+  // a leaf), fall through to path completion on its children so
+  // `set hd <tab>` still surfaces the subtree instead of going
+  // silent.
   const bool is_set_value =
       preceding.size() == 2 && preceding[0] == "set";
   if (is_set_value) {
-    return schema::ValueCompletions(schema, preceding[1],
-                                     partial);
+    auto values = schema::ValueCompletions(schema, preceding[1],
+                                             partial);
+    if (!values.empty()) return values;
+    return schema::Completions(
+        schema, preceding[1] + "." + partial);
   }
   return SuggestCompletions(tree, preceding, partial);
 }
