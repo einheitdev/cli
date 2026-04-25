@@ -27,13 +27,23 @@ auto RoleFromEnv() -> RoleGate {
 auto ResolveLocal()
     -> std::expected<CallerIdentity, Error<AuthError>> {
   CallerIdentity id;
-  uid_t uid = ::getuid();
-  struct passwd *pw = ::getpwuid(uid);
-  if (!pw) {
-    return std::unexpected(Error<AuthError>{
-        AuthError::UnknownUser, "getpwuid failed"});
+  // EINHEIT_USER lets a trusted launcher (e.g. einheit-shell-
+  // launcher) preserve the operator's identity after dropping
+  // privs to a dedicated sandbox uid. Without this hook every
+  // request would be stamped with the sandbox uid's pw_name and
+  // the audit chain would lose the real caller.
+  if (const char *forced = std::getenv("EINHEIT_USER");
+      forced && *forced) {
+    id.user = forced;
+  } else {
+    uid_t uid = ::getuid();
+    struct passwd *pw = ::getpwuid(uid);
+    if (!pw) {
+      return std::unexpected(Error<AuthError>{
+          AuthError::UnknownUser, "getpwuid failed"});
+    }
+    id.user = pw->pw_name;
   }
-  id.user = pw->pw_name;
   // Role mapping comes from daemon config; default to read-only
   // until the daemon responds. Daemon re-stamps the authoritative
   // role on each Response. EINHEIT_ROLE (admin|operator|any) opts
