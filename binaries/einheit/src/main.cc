@@ -21,6 +21,7 @@
 #include "einheit/cli/curve_keys.h"
 #include "einheit/cli/globals.h"
 #include "einheit/cli/learning_daemon.h"
+#include "einheit/cli/locked_sandbox.h"
 #include "einheit/cli/render/table.h"
 #include "einheit/cli/render/terminal_caps.h"
 #include "einheit/cli/render/theme.h"
@@ -397,6 +398,15 @@ auto main(int argc, char **argv) -> int {
     ::unsetenv("EDITOR");
     ::unsetenv("VISUAL");
     ::unsetenv("SHELL");
+    // Defense in depth: install a seccomp-bpf filter that denies
+    // execve+execveat. Layered with whatever an upstream launcher
+    // (einheit-shell-launcher) installed; filters are AND'd so
+    // adding a stricter one only ever tightens the policy.
+    if (auto r = einheit::cli::InstallLockedSeccomp(); !r) {
+      std::cerr << std::format("--locked: seccomp install: {}\n",
+                                r.error().message);
+      return 1;
+    }
   }
 
   // --role forwards into EINHEIT_ROLE so auth::ResolveLocal picks

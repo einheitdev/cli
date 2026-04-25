@@ -22,6 +22,7 @@ add_library(cli_core_obj OBJECT
   src/aliases.cc
   src/line_reader.cc
   src/learning_daemon.cc
+  src/locked_sandbox.cc
 )
 
 target_include_directories(cli_core_obj
