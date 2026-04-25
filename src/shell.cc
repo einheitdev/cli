@@ -227,18 +227,25 @@ auto Dispatch(Shell &s, const ParsedCommand &parsed)
     // the daemon is unreachable, which is the point —
     // the wire-verb `daemon restart` / `daemon stop`
     // pair can't cover the stopped-daemon case.
-    if (spec.path == "daemon start") {
-      int rc = std::system(
-          "systemctl --user start hyper-derp");
-      std::cout << std::format(
-          "  systemctl exited with {}\n",
-          WIFEXITED(rc) ? WEXITSTATUS(rc) : -1);
-      return out;
-    }
-    if (spec.path == "daemon status") {
-      (void)std::system(
-          "systemctl --user status hyper-derp "
-          "--no-pager");
+    if (spec.path == "daemon start" || spec.path == "daemon status") {
+      if (s.locked) {
+        return std::unexpected(MakeError(
+            ShellError::LoopFailed,
+            std::format("`{}` runs systemctl on the host — "
+                        "disabled by --locked",
+                        spec.path)));
+      }
+      if (spec.path == "daemon start") {
+        int rc = std::system(
+            "systemctl --user start hyper-derp");
+        std::cout << std::format(
+            "  systemctl exited with {}\n",
+            WIFEXITED(rc) ? WEXITSTATUS(rc) : -1);
+      } else {
+        (void)std::system(
+            "systemctl --user status hyper-derp "
+            "--no-pager");
+      }
       return out;
     }
     return out;
@@ -433,6 +440,7 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
   binfo.adapter_name = meta.id;
   binfo.version = meta.version;
   binfo.learning_mode = s.learning_mode;
+  binfo.locked = s.locked;
   binfo.target_name = s.target_name;
   binfo.tip = render::PickTip();
   const auto theme = s.theme.value_or(
@@ -469,8 +477,12 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
                             render::OutputFormat::Table, theme);
 
   // Best-effort history load; absence of a backing file is fine.
+  // In locked mode keep history strictly in-memory so a sandboxed
+  // shell can't write under /var/lib/einheit/users/...
   History history;
-  if (auto h = Load(s.caller.user); h) history = *h;
+  if (!s.locked) {
+    if (auto h = Load(s.caller.user); h) history = *h;
+  }
 
   // Macro recording state (separate from --record). Per-user
   // macro files live under ~/.einheit/macros/<name>.einheit.
@@ -488,9 +500,11 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
 
   // Optional recording file. Every accepted command lands here,
   // one per line, so `einheit --replay file` (or piping the file
-  // back as stdin) re-runs the same session.
+  // back as stdin) re-runs the same session. main.cc already
+  // refuses --record / --replay in locked mode; this defense-in-
+  // depth check keeps any callers that bypass main from writing.
   std::unique_ptr<std::ofstream> record;
-  if (!s.record_path.empty()) {
+  if (!s.locked && !s.record_path.empty()) {
     std::filesystem::create_directories(
         std::filesystem::path(s.record_path).parent_path());
     record = std::make_unique<std::ofstream>(s.record_path,
@@ -508,11 +522,18 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
 
   // Merge legacy k=v aliases with the YAML file at
   // ~/.einheit/aliases.yaml (if present). YAML wins on conflict.
+  // Locked mode: skip the legacy on-disk alias file entirely (it
+  // sits under /var/lib/einheit/users/<user>/) and refuse `include:`
+  // chains in the per-user YAML.
   Aliases aliases;
-  if (auto a = LoadAliases(s.caller.user); a) aliases = *a;
+  if (!s.locked) {
+    if (auto a = LoadAliases(s.caller.user); a) aliases = *a;
+  }
   if (const auto yaml_path = DefaultYamlPath(); !yaml_path.empty()) {
     if (std::filesystem::exists(yaml_path)) {
-      if (auto y = LoadAliasesYaml(yaml_path); y) {
+      if (auto y = LoadAliasesYaml(yaml_path,
+                                   /*allow_includes=*/!s.locked);
+          y) {
         MergeAliases(aliases, *y);
       } else {
         // Surface YAML parse errors — silent failure here bit us
@@ -684,7 +705,18 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
       }
     }
     if (result) {
-      (void)Append(history, line);
+      if (s.locked) {
+        // In-memory only: don't touch the on-disk history file.
+        history.entries.push_back(line);
+        if (history.entries.size() > history.max_entries) {
+          history.entries.erase(
+              history.entries.begin(),
+              history.entries.begin() +
+                  (history.entries.size() - history.max_entries));
+        }
+      } else {
+        (void)Append(history, line);
+      }
       s.stats.commands += 1;
       if (parsed->spec->wire_command == "commit" &&
           result->response &&
@@ -1007,7 +1039,13 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
           }
         }
       } else if (parsed->spec->path == "macro record") {
-        if (parsed->args.empty()) {
+        if (s.locked) {
+          render::RenderError(
+              "macro",
+              "macros write to ~/.einheit/macros — "
+              "disabled by --locked",
+              "", renderer);
+        } else if (parsed->args.empty()) {
           render::RenderError("macro",
                               "usage: macro record <name>", "",
                               renderer);
@@ -1051,6 +1089,14 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
           macro_recording_name.clear();
         }
       } else if (parsed->spec->path == "macro run") {
+        if (s.locked) {
+          render::RenderError(
+              "macro",
+              "macro run reads from ~/.einheit/macros — "
+              "disabled by --locked",
+              "", renderer);
+          continue;
+        }
         if (parsed->args.empty()) {
           render::RenderError("macro",
                               "usage: macro run <name>", "",
@@ -1271,7 +1317,7 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
       } catch (const std::exception &e) {
         std::cerr << "render: " << e.what() << '\n';
       }
-      render::Flush(buf.str(), s.caps);
+      render::Flush(buf.str(), s.caps, /*allow_pager=*/!s.locked);
     }
 
     if (time_it) {

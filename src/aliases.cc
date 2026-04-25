@@ -31,7 +31,8 @@ auto AliasPathFor(const std::string &base,
 
 // Recursively load a YAML alias file. `seen` prevents include cycles.
 auto LoadYamlInto(const std::string &path, Aliases &out,
-                  std::unordered_set<std::string> &seen)
+                  std::unordered_set<std::string> &seen,
+                  bool allow_includes)
     -> std::expected<void, Error<AliasError>> {
   namespace fs = std::filesystem;
   const auto canonical = fs::weakly_canonical(path).string();
@@ -53,9 +54,17 @@ auto LoadYamlInto(const std::string &path, Aliases &out,
 
   // Includes are merged first so later definitions override.
   if (doc["include"] && doc["include"].IsSequence()) {
+    if (!allow_includes) {
+      return std::unexpected(MakeError(
+          AliasError::Malformed,
+          std::format("alias 'include:' directive refused in locked "
+                      "mode ({})",
+                      path)));
+    }
     for (const auto &inc : doc["include"]) {
       const auto inc_path = inc.as<std::string>();
-      if (auto r = LoadYamlInto(inc_path, out, seen); !r) {
+      if (auto r = LoadYamlInto(inc_path, out, seen, allow_includes);
+          !r) {
         return r;
       }
     }
@@ -103,12 +112,12 @@ auto LoadAliases(const std::string &user,
   }
 }
 
-auto LoadAliasesYaml(const std::string &path)
+auto LoadAliasesYaml(const std::string &path, bool allow_includes)
     -> std::expected<Aliases, Error<AliasError>> {
   Aliases out;
   out.path = path;
   std::unordered_set<std::string> seen;
-  if (auto r = LoadYamlInto(path, out, seen); !r) {
+  if (auto r = LoadYamlInto(path, out, seen, allow_includes); !r) {
     return std::unexpected(r.error());
   }
   return out;

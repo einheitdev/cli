@@ -31,9 +31,9 @@ auto ShouldPage(const std::string &content, const TerminalCaps &caps)
   return lines > static_cast<std::size_t>(caps.height) - 2;
 }
 
-auto Flush(const std::string &content, const TerminalCaps &caps)
-    -> void {
-  if (!ShouldPage(content, caps)) {
+auto Flush(const std::string &content, const TerminalCaps &caps,
+           bool allow_pager) -> void {
+  if (!allow_pager || !ShouldPage(content, caps)) {
     std::cout << content;
     return;
   }

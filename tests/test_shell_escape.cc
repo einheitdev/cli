@@ -61,7 +61,7 @@ TEST(ShellEscape, NotifiesDaemonOnEntryAndExit) {
   Hooks hooks;
   hooks.run_shell =
       [](const std::string & /*bash*/) -> int { return 0; };
-  auto rc = Escape(*tx, caller, hooks);
+  auto rc = Escape(*tx, caller, /*locked=*/false, hooks);
   ASSERT_TRUE(rc.has_value()) << rc.error().message;
   EXPECT_EQ(*rc, 0);
 
@@ -84,9 +84,34 @@ TEST(ShellEscape, ReturnsSubprocessExitCode) {
   Hooks hooks;
   hooks.run_shell =
       [](const std::string & /*bash*/) -> int { return 42; };
-  auto rc = Escape(*tx, caller, hooks);
+  auto rc = Escape(*tx, caller, /*locked=*/false, hooks);
   ASSERT_TRUE(rc.has_value());
   EXPECT_EQ(*rc, 42);
+}
+
+TEST(ShellEscape, LockedRefusesEvenForAdmin) {
+  Recorder rec;
+  auto daemon = MakeDaemon(rec);
+  auto tx = BuildTransport(daemon);
+  ASSERT_NE(tx, nullptr);
+
+  auth::CallerIdentity caller;
+  caller.user = "karl";
+  caller.role = RoleGate::AdminOnly;
+
+  Hooks hooks;
+  hooks.run_shell = [](const std::string &) -> int {
+    ADD_FAILURE() << "subprocess hook should not run when locked";
+    return 0;
+  };
+  auto rc = Escape(*tx, caller, /*locked=*/true, hooks);
+  ASSERT_FALSE(rc.has_value());
+  EXPECT_EQ(rc.error().code, EscapeError::NotAuthorised);
+
+  // Locked refusal is silent on the wire — no shell_enter or
+  // shell_exit, since no shell was spawned.
+  std::lock_guard<std::mutex> lk(rec.mu);
+  EXPECT_TRUE(rec.commands.empty());
 }
 
 TEST(ShellEscape, NonAdminRejected) {

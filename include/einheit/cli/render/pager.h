@@ -28,8 +28,11 @@ auto ShouldPage(const std::string &content, const TerminalCaps &caps)
 /// Write `content` either direct to stdout or via the user's pager.
 /// @param content Pre-rendered text.
 /// @param caps Terminal capabilities.
-auto Flush(const std::string &content, const TerminalCaps &caps)
-    -> void;
+/// @param allow_pager When false, never spawn a pager — write
+/// straight to stdout. Used by `--locked` mode to keep `popen` off
+/// the table.
+auto Flush(const std::string &content, const TerminalCaps &caps,
+           bool allow_pager = true) -> void;
 
 }  // namespace einheit::cli::render
 

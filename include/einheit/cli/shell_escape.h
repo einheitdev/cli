@@ -41,10 +41,13 @@ struct Hooks {
 /// `shell_exit` wire messages bracketing the subprocess.
 /// @param tx Connected transport; used to notify the daemon.
 /// @param caller Resolved identity of the user running the command.
+/// @param locked When true, refuse outright — `--locked` mode null-
+/// routes every escape vector regardless of caller role. The daemon
+/// is not notified because no shell is spawned.
 /// @param hooks Optional override (tests).
 /// @returns The shell's exit code on success, EscapeError otherwise.
 auto Escape(transport::Transport &tx,
-            const auth::CallerIdentity &caller,
+            const auth::CallerIdentity &caller, bool locked = false,
             const Hooks &hooks = {})
     -> std::expected<int, Error<EscapeError>>;
 

@@ -51,8 +51,14 @@ auto ResolveShellPath() -> std::string {
 }  // namespace
 
 auto Escape(transport::Transport &tx,
-            const auth::CallerIdentity &caller, const Hooks &hooks)
+            const auth::CallerIdentity &caller, bool locked,
+            const Hooks &hooks)
     -> std::expected<int, Error<EscapeError>> {
+  if (locked) {
+    return std::unexpected(MakeError(
+        EscapeError::NotAuthorised,
+        "shell escape disabled by --locked"));
+  }
   if (caller.role != RoleGate::AdminOnly) {
     return std::unexpected(MakeError(
         EscapeError::NotAuthorised,

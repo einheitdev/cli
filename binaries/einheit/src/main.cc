@@ -332,6 +332,13 @@ auto main(int argc, char **argv) -> int {
   bool status_bar_flag = false;
   app.add_flag("--status-bar", status_bar_flag,
                "Show a live status-chips line above the prompt");
+  bool locked = false;
+  app.add_flag("--locked", locked,
+               "Null-route every host-OS escape vector: shell escape, "
+               "auto-pager spawn, daemon start/status systemctl, "
+               "alias `include:` directives, history file writes, "
+               "and the --record/--replay/--theme path arguments. "
+               "Use when running einheit inside a sandbox.");
   std::string adapter_name = "example";
   app.add_option("--adapter", adapter_name,
                  "Product adapter: example | hd-relay");
@@ -371,6 +378,25 @@ auto main(int argc, char **argv) -> int {
     app.parse(argc, argv);
   } catch (const CLI::ParseError &e) {
     return app.exit(e);
+  }
+
+  // --locked rejects every flag whose argument is a filesystem
+  // path the caller controls. We refuse early so the rest of the
+  // setup can assume those paths are off-limits, and scrub the
+  // env vars consulted by downstream tooling ($PAGER, $EDITOR,
+  // $SHELL, $VISUAL) as defense in depth.
+  if (locked) {
+    if (!record_path.empty() || !replay_path.empty() ||
+        !theme_path.empty()) {
+      std::cerr
+          << "--locked: refusing --record / --replay / --theme — "
+             "these accept caller-controlled paths.\n";
+      return 1;
+    }
+    ::unsetenv("PAGER");
+    ::unsetenv("EDITOR");
+    ::unsetenv("VISUAL");
+    ::unsetenv("SHELL");
   }
 
   // --role forwards into EINHEIT_ROLE so auth::ResolveLocal picks
@@ -457,6 +483,7 @@ auto main(int argc, char **argv) -> int {
   s.tx = std::move(tx);
   s.caps = caps;
   s.learning_mode = learn;
+  s.locked = locked;
   s.target_name = target;
   s.record_path = record_path;
   if (auto saved = workstation::Load(workstation::DefaultPath());

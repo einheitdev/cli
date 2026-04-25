@@ -58,6 +58,11 @@ struct Shell {
   /// True when running against the in-process learning daemon.
   /// Drives the startup banner and any learning-specific prompts.
   bool learning_mode = false;
+  /// True when started under `--locked`. Null-routes every host-OS
+  /// escape vector: `daemon start/status` shells, the auto-pager,
+  /// shell-escape verb, --record/--replay/--theme file paths, alias
+  /// `include:` directives, and the per-user history file.
+  bool locked = false;
   /// Resolved target name when `--target` / `einheit use` is active.
   std::string target_name;
 

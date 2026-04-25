@@ -37,6 +37,16 @@ einheit_add_test(test_format_output)
 einheit_add_test(test_learning_daemon)
 einheit_add_test(test_theme)
 
+# --locked mode coverage — links the example adapter so the
+# dispatch tests can register globals against a real adapter tree.
+add_executable(test_locked_mode test_locked_mode.cc)
+target_include_directories(test_locked_mode
+  PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(test_locked_mode
+  PRIVATE einheit_cli einheit_adapter_example
+          GTest::gtest GTest::gtest_main)
+gtest_discover_tests(test_locked_mode)
+
 # End-to-end integration test: builds a tiny daemon binary and
 # drives the real einheit binary against it.
 add_subdirectory(integ)

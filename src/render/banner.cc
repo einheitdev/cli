@@ -61,6 +61,11 @@ auto UnicodeBanner(const BannerInfo &info, std::uint16_t width,
         text("learning mode — state is in-memory") |
         color(theme.warn) | bold);
   }
+  if (info.locked) {
+    info_lines.push_back(
+        text("[locked] — shell escape, pager spawn, file paths off") |
+        color(theme.bad) | bold);
+  }
   if (!info.tip.empty()) {
     info_lines.push_back(
         text(std::format("tip: {}", info.tip)) |
@@ -98,6 +103,9 @@ auto AsciiBanner(const BannerInfo &info) -> std::string {
   }
   if (info.learning_mode) {
     out += "| LEARNING MODE — state is in-memory          |\n";
+  }
+  if (info.locked) {
+    out += "| [LOCKED] — escape vectors disabled          |\n";
   }
   out += "+---------------------------------------------+\n";
   return out;

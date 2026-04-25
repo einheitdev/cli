@@ -27,6 +27,9 @@ struct BannerInfo {
   /// True when running against the in-process learning daemon.
   /// Renders a prominent yellow "LEARNING MODE" line.
   bool learning_mode = false;
+  /// True when started under `--locked`. Renders a "[locked]" chip
+  /// so operators see at a glance which capabilities are off.
+  bool locked = false;
   /// Optional target name from `--target` / `einheit use`. Shown
   /// when non-empty.
   std::string target_name;

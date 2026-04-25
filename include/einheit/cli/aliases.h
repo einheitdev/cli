@@ -62,8 +62,13 @@ auto LoadAliases(const std::string &user,
 ///     - /etc/einheit/team-aliases.yaml       # later entries win
 ///
 /// @param path Absolute path to the YAML file.
+/// @param allow_includes When false, an `include:` directive is
+/// rejected with `AliasError::Malformed` rather than followed.
+/// `--locked` mode passes false so an attacker who plants an
+/// `aliases.yaml` cannot pivot to read arbitrary files.
 /// @returns Populated Aliases or AliasError.
-auto LoadAliasesYaml(const std::string &path)
+auto LoadAliasesYaml(const std::string &path,
+                     bool allow_includes = true)
     -> std::expected<Aliases, Error<AliasError>>;
 
 /// Default YAML alias path under the user's home directory.
