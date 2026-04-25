@@ -59,38 +59,50 @@ if(TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
 endif()
 
 # ----- msgpack-cxx ----------------------------------------------------------
-FetchContent_Declare(msgpack-cxx
-  GIT_REPOSITORY https://github.com/msgpack/msgpack-c.git
-  GIT_TAG cpp-6.1.1
-  GIT_SHALLOW TRUE
-)
-set(MSGPACK_CXX20 OFF CACHE BOOL "" FORCE)
-set(MSGPACK_USE_BOOST OFF CACHE BOOL "" FORCE)
-set(MSGPACK_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(MSGPACK_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(msgpack-cxx)
+# Skip if a parent project (e.g. hyper-derp's bundled build) already
+# pulled msgpack-cxx — re-declaring the same target would collide.
+if(NOT TARGET msgpack-cxx)
+  FetchContent_Declare(msgpack-cxx
+    GIT_REPOSITORY https://github.com/msgpack/msgpack-c.git
+    GIT_TAG cpp-6.1.1
+    GIT_SHALLOW TRUE
+  )
+  set(MSGPACK_CXX20 OFF CACHE BOOL "" FORCE)
+  set(MSGPACK_USE_BOOST OFF CACHE BOOL "" FORCE)
+  set(MSGPACK_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(MSGPACK_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(msgpack-cxx)
+endif()
 
 # ----- spdlog ---------------------------------------------------------------
-set(SPDLOG_BUILD_SHARED ON CACHE BOOL "" FORCE)
-set(SPDLOG_BUILD_STATIC OFF CACHE BOOL "" FORCE)
-set(SPDLOG_NO_EXCEPTIONS OFF CACHE BOOL "" FORCE)
+# Skip if a parent project already provides spdlog.
+if(NOT TARGET spdlog AND NOT TARGET spdlog::spdlog)
+  set(SPDLOG_BUILD_SHARED ON CACHE BOOL "" FORCE)
+  set(SPDLOG_BUILD_STATIC OFF CACHE BOOL "" FORCE)
+  set(SPDLOG_NO_EXCEPTIONS OFF CACHE BOOL "" FORCE)
 
-FetchContent_Declare(spdlog
-  GIT_REPOSITORY https://github.com/gabime/spdlog.git
-  GIT_TAG v1.16.0
-  GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(spdlog)
+  FetchContent_Declare(spdlog
+    GIT_REPOSITORY https://github.com/gabime/spdlog.git
+    GIT_TAG v1.16.0
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_MakeAvailable(spdlog)
+endif()
 
 # ----- CLI11 ----------------------------------------------------------------
-FetchContent_Declare(cli11
-  GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-  GIT_TAG v2.6.0
-  GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(cli11)
-if(TARGET CLI11 AND NOT TARGET CLI11::CLI11)
-  add_library(CLI11::CLI11 ALIAS CLI11)
+# Skip if a parent project already provides CLI11 (find_package or
+# FetchContent).  hyper-derp's bundled build does find_package(CLI11)
+# at configure time, which creates CLI11::CLI11 before this file runs.
+if(NOT TARGET CLI11::CLI11 AND NOT TARGET CLI11)
+  FetchContent_Declare(cli11
+    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+    GIT_TAG v2.6.0
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_MakeAvailable(cli11)
+  if(TARGET CLI11 AND NOT TARGET CLI11::CLI11)
+    add_library(CLI11::CLI11 ALIAS CLI11)
+  endif()
 endif()
 
 # ----- FTXUI ----------------------------------------------------------------

@@ -6,8 +6,11 @@
 
 #include <cctype>
 #include <chrono>
+#include <cstdlib>
+#include <fstream>
 #include <format>
 #include <random>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -29,6 +32,66 @@ constexpr const char *kLogo[] = {
     "|  __/| | | | | | | |  __/ | |_ ",
     " \\___||_|_| |_|_| |_|\\___|_|\\__|",
 };
+
+// Per-deployment branding override.  Adapters that ship under their
+// own product name (e.g. hyper-derp's `hd-cli`) set EINHEIT_BRAND in
+// the environment to replace the literal word "einheit" in the
+// plain-ASCII banner, and EINHEIT_LOGO_PATH to a file whose
+// contents are used as the logo column instead of `kLogo`.  The
+// file may contain ANSI escapes (chafa output is the canonical
+// case); UnicodeBanner passes them through to the terminal
+// untouched and lets FTXUI handle the layout.
+auto BrandOverride() -> std::string {
+  if (const char *env = std::getenv("EINHEIT_BRAND")) {
+    if (env[0] != '\0') return env;
+  }
+  return "einheit";
+}
+
+auto LogoOverride() -> std::vector<std::string> {
+  std::vector<std::string> out;
+  const char *path = std::getenv("EINHEIT_LOGO_PATH");
+  if (path == nullptr || path[0] == '\0') return out;
+  std::ifstream f(path);
+  if (!f) return out;
+  std::string line;
+  while (std::getline(f, line)) {
+    out.push_back(std::move(line));
+  }
+  return out;
+}
+
+// Renders the override banner: raw logo contents (typically chafa
+// output with ANSI escapes) followed by a plain-text product info
+// block. Bypasses FTXUI because FTXUI's `text()` element treats
+// the ANSI escapes as opaque characters and breaks layout.
+auto OverrideBanner(const BannerInfo &info,
+                    const std::vector<std::string> &logo)
+    -> std::string {
+  std::string out;
+  out += '\n';
+  for (const auto &line : logo) {
+    out += line;
+    out += '\n';
+  }
+  out += std::format("  {}\n", info.product_name);
+  out += std::format("  adapter: {}   version: {}\n",
+                     info.adapter_name, info.version);
+  if (!info.target_name.empty()) {
+    out += std::format("  target: {}\n", info.target_name);
+  }
+  if (info.learning_mode) {
+    out += "  learning mode — state is in-memory\n";
+  }
+  if (info.locked) {
+    out += "  [locked] — shell escape, pager spawn, file paths off\n";
+  }
+  if (!info.tip.empty()) {
+    out += std::format("  tip: {}\n", info.tip);
+  }
+  out += '\n';
+  return out;
+}
 
 auto UnicodeBanner(const BannerInfo &info, std::uint16_t width,
                    const Theme &theme) -> std::string {
@@ -93,9 +156,21 @@ auto UnicodeBanner(const BannerInfo &info, std::uint16_t width,
 }
 
 auto AsciiBanner(const BannerInfo &info) -> std::string {
+  const auto brand = BrandOverride();
+  // Inside-the-bars row width is 43 chars (the "+---...---+" runs
+  // are 45 dashes; subtract two spaces for the leading/trailing
+  // padding). Build the brand+product row dynamically so a long
+  // brand name (e.g. "hyper-derp") doesn't overflow.
+  constexpr std::size_t kRowWidth = 43;
+  std::string row = brand + "  " + info.product_name;
+  if (row.size() < kRowWidth) {
+    row += std::string(kRowWidth - row.size(), ' ');
+  } else if (row.size() > kRowWidth) {
+    row.resize(kRowWidth);
+  }
   std::string out;
   out += "+---------------------------------------------+\n";
-  out += std::format("| einheit  {:<34} |\n", info.product_name);
+  out += "| " + row + " |\n";
   out += std::format("| adapter: {:<14} version: {:<10} |\n",
                      info.adapter_name, info.version);
   if (!info.target_name.empty()) {
@@ -120,6 +195,19 @@ auto Banner(const BannerInfo &info, const TerminalCaps &caps)
 
 auto Banner(const BannerInfo &info, const TerminalCaps &caps,
             const Theme &theme) -> std::string {
+  // Adapter-supplied logo file (e.g. chafa output) takes precedence
+  // when the terminal can render it.  Falls back to plain-ASCII for
+  // dumb terminals because chafa output is meaningless without
+  // colour.  Keeping this check here means EINHEIT_LOGO_PATH
+  // honours --color=never and `TERM=dumb` like the rest of the
+  // banner.
+  if (!caps.force_plain && caps.unicode &&
+      caps.colors != ColorDepth::None) {
+    auto override_logo = LogoOverride();
+    if (!override_logo.empty()) {
+      return OverrideBanner(info, override_logo);
+    }
+  }
   if (caps.force_plain || !caps.unicode ||
       caps.colors == ColorDepth::None) {
     return AsciiBanner(info);
