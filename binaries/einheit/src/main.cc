@@ -449,6 +449,9 @@ auto main(int argc, char **argv) -> int {
   } else if (adapter_name == "takt") {
     adapter =
         einheit::adapters::takt::NewTaktAdapter();
+    // takt uses JSON over ZMQ, not msgpack — skip the
+    // default transport setup and use the takt-specific
+    // one after the adapter block.
   } else if (adapter_name == "example" ||
              adapter_name.empty()) {
     adapter =
@@ -488,6 +491,26 @@ auto main(int argc, char **argv) -> int {
     auto built = transport::NewZmqLocalTransport(cfg);
     if (!built || !(*built)->Connect()) {
       std::cerr << "learning transport setup failed\n";
+      return 1;
+    }
+    tx = std::move(*built);
+  } else if (adapter_name == "takt") {
+    auto ctl = endpoint_override.empty()
+        ? adapter->ControlSocketPath()
+        : endpoint_override;
+    auto evt = event_endpoint_override.empty()
+        ? adapter->EventSocketPath()
+        : event_endpoint_override;
+    auto built = einheit::adapters::takt::NewTaktTransport(
+        ctl, evt);
+    if (!built) {
+      std::cerr << std::format("takt transport: {}\n",
+                               built.error().message);
+      return 1;
+    }
+    if (auto r = (*built)->Connect(); !r) {
+      std::cerr << std::format("takt connect: {}\n",
+                               r.error().message);
       return 1;
     }
     tx = std::move(*built);

@@ -22,6 +22,8 @@
 #include "einheit/cli/render/table.h"
 #include "einheit/cli/schema.h"
 
+#include "takt_transport.h"
+
 namespace einheit::adapters::takt {
 namespace {
 
@@ -322,6 +324,18 @@ class TaktAdapter : public ProductAdapter {
 auto NewTaktAdapter()
     -> std::unique_ptr<einheit::cli::ProductAdapter> {
   return std::make_unique<TaktAdapter>();
+}
+
+auto NewTaktTransport(
+    const std::string &control,
+    const std::string &event)
+    -> std::expected<
+        std::unique_ptr<cli::transport::Transport>,
+        cli::Error<cli::transport::TransportError>> {
+  TaktTransportConfig cfg;
+  cfg.control_endpoint = control;
+  cfg.event_endpoint = event;
+  return MakeTaktTransport(std::move(cfg));
 }
 
 }  // namespace einheit::adapters::takt
