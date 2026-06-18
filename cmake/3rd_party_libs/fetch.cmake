@@ -58,6 +58,19 @@ if(TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
   add_library(yaml-cpp::yaml-cpp ALIAS yaml-cpp)
 endif()
 
+# ----- nlohmann_json (takt adapter) -----------------------------------------
+find_package(nlohmann_json QUIET)
+if(NOT TARGET nlohmann_json::nlohmann_json)
+  FetchContent_Declare(nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+    GIT_SHALLOW TRUE
+  )
+  set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+  set(JSON_Install ON CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(nlohmann_json)
+endif()
+
 # ----- msgpack-cxx ----------------------------------------------------------
 # Skip if a parent project (e.g. hyper-derp's bundled build) already
 # pulled msgpack-cxx — re-declaring the same target would collide.

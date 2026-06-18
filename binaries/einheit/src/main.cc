@@ -17,6 +17,7 @@
 
 #include "adapters/example/adapter.h"
 #include "adapters/hd_relay/adapter.h"
+#include "adapters/takt/adapter.h"
 #include "einheit/cli/command_tree.h"
 #include "einheit/cli/curve_keys.h"
 #include "einheit/cli/globals.h"
@@ -342,7 +343,8 @@ auto main(int argc, char **argv) -> int {
                "Use when running einheit inside a sandbox.");
   std::string adapter_name = "example";
   app.add_option("--adapter", adapter_name,
-                 "Product adapter: example | hd-relay");
+                 "Product adapter: "
+                 "example | hd-relay | takt");
   std::string endpoint_override;
   std::string event_endpoint_override;
   app.add_option(
@@ -442,12 +444,19 @@ auto main(int argc, char **argv) -> int {
 
   std::unique_ptr<einheit::cli::ProductAdapter> adapter;
   if (adapter_name == "hd-relay") {
-    adapter = einheit::adapters::hd_relay::NewHdRelayAdapter();
-  } else if (adapter_name == "example" || adapter_name.empty()) {
-    adapter = einheit::adapters::example::NewExampleAdapter();
+    adapter =
+        einheit::adapters::hd_relay::NewHdRelayAdapter();
+  } else if (adapter_name == "takt") {
+    adapter =
+        einheit::adapters::takt::NewTaktAdapter();
+  } else if (adapter_name == "example" ||
+             adapter_name.empty()) {
+    adapter =
+        einheit::adapters::example::NewExampleAdapter();
   } else {
     std::cerr << std::format(
-        "unknown adapter '{}' — try 'example' or 'hd-relay'\n",
+        "unknown adapter '{}' — try 'example', "
+        "'hd-relay', or 'takt'\n",
         adapter_name);
     return 1;
   }

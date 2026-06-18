@@ -11,6 +11,7 @@ target_link_libraries(einheit
     einheit_cli
     einheit_adapter_example
     einheit_adapter_hd_relay
+    einheit_adapter_takt
 )
 
 set_target_properties(einheit PROPERTIES
