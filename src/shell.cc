@@ -197,6 +197,11 @@ auto Dispatch(Shell &s, const ParsedCommand &parsed)
   DispatchResult out;
   const auto &spec = *parsed.spec;
 
+  if (s.pre_dispatch && s.pre_dispatch(s, parsed)) {
+    out.handled_locally = true;
+    return out;
+  }
+
   // Framework-local verbs never cross the wire.
   if (spec.wire_command.empty()) {
     out.handled_locally = true;

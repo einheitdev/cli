@@ -87,6 +87,11 @@ struct Shell {
         std::chrono::steady_clock::now();
   } stats;
 
+  /// Optional pre-dispatch hook. Return true to indicate the
+  /// command was handled (skip normal dispatch).
+  std::function<bool(Shell &, const ParsedCommand &)>
+      pre_dispatch;
+
   /// Transport health snapshot, updated on every Dispatch that
   /// crosses the wire. Drives the status-bar connection chip.
   struct Health {
