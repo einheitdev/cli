@@ -587,6 +587,11 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
       });
 
   while (true) {
+   // Per-command safety net: no bug in any command handler or
+   // renderer may crash the CLI. A thrown exception becomes an
+   // error line and the shell keeps running. `break`/`continue`
+   // pass through a try unaffected; only throws reach the catch.
+   try {
     // Status bar is its own line above the prompt so the reader
     // doesn't see an embedded newline in its prompt. Opt-in via
     // --status-bar or the in-shell `statusbar on` command.
@@ -1339,6 +1344,17 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
           "{}  time: {}ms total, {}ms wire{}\n",
           dim, total_ms, wire_ms, kReset);
     }
+   } catch (const std::exception &e) {
+     s.stats.errors += 1;
+     render::RenderError("internal", e.what(),
+                         "command aborted; the shell is still up",
+                         renderer);
+   } catch (...) {
+     s.stats.errors += 1;
+     render::RenderError("internal", "unexpected error",
+                         "command aborted; the shell is still up",
+                         renderer);
+   }
   }
 
   // Session-end summary.
