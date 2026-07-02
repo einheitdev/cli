@@ -103,6 +103,29 @@ TEST(CodecResilience, NonMapPayloadRejected) {
   EXPECT_FALSE(r.has_value());
 }
 
+TEST(CodecResilience, HugeLengthPrefixDoesNotExhaustMemory) {
+  // A 5-byte array32 header claiming ~2 billion elements, with no
+  // body. An unbounded decoder pre-allocates ~32 GB here (ASan aborts
+  // with out-of-memory); the length-derived unpack bound must reject
+  // it as a clean typed error instead. Real DoS surface: a malformed
+  // daemon reply must never exhaust CLI memory.
+  std::vector<std::uint8_t> hostile_array{0xdd, 0x7f, 0xff, 0xff, 0xff};
+  auto r = DecodeRequest(hostile_array);
+  EXPECT_FALSE(r.has_value());
+  auto r2 = DecodeResponse(hostile_array);
+  EXPECT_FALSE(r2.has_value());
+
+  // Same attack via a str32 header claiming a ~4 GB string.
+  std::vector<std::uint8_t> hostile_str{0xdb, 0xff, 0xff, 0xff, 0xff};
+  auto r3 = DecodeRequest(hostile_str);
+  EXPECT_FALSE(r3.has_value());
+
+  // And a map32 header claiming ~4 billion pairs.
+  std::vector<std::uint8_t> hostile_map{0xdf, 0xff, 0xff, 0xff, 0xff};
+  auto r4 = DecodeRequest(hostile_map);
+  EXPECT_FALSE(r4.has_value());
+}
+
 TEST(CodecResilience, EventBodyRoundTripSurvivesBinaryPayload) {
   Event ev;
   ev.timestamp = "2026-04-20T00:00:00.000Z";

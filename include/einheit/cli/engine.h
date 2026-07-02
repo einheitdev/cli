@@ -37,6 +37,10 @@ enum class EngineError {
   /// Command declares requires_session but no configure session is
   /// open — enforced here so every front-end gates identically.
   SessionRequired,
+  /// Caller's role does not satisfy the command's role gate — enforced
+  /// here, the single execution chokepoint, so role is honoured even
+  /// by a front-end that skips the parse-time check (gap #8).
+  RoleForbidden,
   /// Command is framework-local (empty wire_command); the engine only
   /// executes wire commands, front-ends handle local verbs.
   NotAWireCommand,

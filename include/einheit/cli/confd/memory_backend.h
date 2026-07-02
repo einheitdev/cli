@@ -50,7 +50,9 @@ class MemoryBackend : public ConfigBackend {
   auto FailNextApply() -> void;
 
  private:
-  std::shared_ptr<const schema::Schema> schema_;
+  // Non-null by construction — a MemoryBackend built with a null
+  // schema falls back to the empty DefaultSchema(), never a null deref.
+  schema::SchemaHandle schema_;
   mutable std::mutex mu_;
   Config device_;
   CommitId rev_ = 0;

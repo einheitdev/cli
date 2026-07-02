@@ -10,9 +10,7 @@
 
 #include "adapters/hd_relay/adapter.h"
 
-#include <filesystem>
 #include <format>
-#include <fstream>
 #include <memory>
 #include <mutex>
 #include <ostream>
@@ -293,17 +291,12 @@ config:
 types: {}
 )YAML";
 
-auto LoadBakedSchema() -> std::shared_ptr<Schema> {
-  const auto path =
-      std::filesystem::temp_directory_path() /
-      "einheit_hd_relay_schema.yaml";
-  {
-    std::ofstream f(path);
-    f << kSchemaYaml;
-  }
-  auto s = einheit::cli::schema::LoadSchema(path.string());
-  if (!s) return std::make_shared<Schema>();
-  return *s;
+auto LoadBakedSchema() -> einheit::cli::schema::SchemaHandle {
+  // In-process build (no /tmp round-trip). A parse failure yields a
+  // default (empty, non-null) handle, never a null deref (gap #5).
+  auto s = einheit::cli::schema::LoadSchemaFromString(kSchemaYaml);
+  if (!s) return {};
+  return einheit::cli::schema::SchemaHandle(*s);
 }
 
 // -- Command builder helpers -----------------------------------------------
@@ -478,7 +471,7 @@ class HdRelayAdapter : public ProductAdapter {
   }
 
   auto GetSchema() const -> const Schema & override {
-    return *schema_;
+    return schema_.Get();
   }
 
   auto ControlSocketPath() const -> std::string override {
@@ -779,7 +772,7 @@ class HdRelayAdapter : public ProductAdapter {
     RenderFormatted(t, renderer);
   }
 
-  std::shared_ptr<Schema> schema_;
+  einheit::cli::schema::SchemaHandle schema_;
   mutable std::mutex series_mu_;
   mutable std::unordered_map<std::string, std::vector<double>>
       series_;

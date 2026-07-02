@@ -101,6 +101,17 @@ struct ParsedCommand {
 auto Register(CommandTree &tree, CommandSpec spec)
     -> std::expected<void, Error<CommandTreeError>>;
 
+/// Whether a caller holding `caller` role satisfies a command's
+/// required `role` gate. The single source of truth for role
+/// authorisation, shared by `Parse` (early UX rejection) and the
+/// execution engine (the authoritative gate) so both honour a
+/// command's declared role identically — one gating rule, not two
+/// (gap #8).
+/// @param caller Role the caller holds.
+/// @param required Role the command demands.
+/// @returns true iff the caller is authorised.
+auto RoleAllows(RoleGate caller, RoleGate required) -> bool;
+
 /// Parse a whitespace-split command line into a ParsedCommand. Does
 /// not validate schema-typed args; does check presence + role.
 /// @param tree Registered commands.

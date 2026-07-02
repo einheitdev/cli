@@ -99,6 +99,34 @@ message(STATUS "Build system: ${CMAKE_GENERATOR}")
 message(STATUS "C compiler:   ${CMAKE_C_COMPILER}")
 message(STATUS "C++ compiler: ${CMAKE_CXX_COMPILER}")
 
+# ============================================================================
+# Sanitizers — the "prevent" half of crash safety (cli-harden gate)
+# ============================================================================
+# The null-schema crash (gap #5) was a SIGSEGV that no try/catch could
+# catch. AddressSanitizer + UndefinedBehaviorSanitizer turn that whole
+# bug class — null derefs, use-after-free, buffer overflows, signed
+# overflow, misaligned access — into a hard test failure instead of a
+# field crash. Enabled via the `asan` preset; the full suite must pass
+# clean under it as part of the acceptance gate.
+option(EINHEIT_SANITIZE
+  "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+if(EINHEIT_SANITIZE)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    message(FATAL_ERROR
+      "EINHEIT_SANITIZE requires GCC or Clang")
+  endif()
+  message(STATUS "Sanitizers ON: address, undefined")
+  # -fno-sanitize-recover=all: a UBSan finding aborts (non-zero exit)
+  # so ctest actually fails instead of merely logging a warning.
+  # Frame pointers + no inlining tunings keep backtraces readable.
+  set(_einheit_san_flags
+    -fsanitize=address,undefined
+    -fno-sanitize-recover=all
+    -fno-omit-frame-pointer)
+  add_compile_options(${_einheit_san_flags})
+  add_link_options(${_einheit_san_flags})
+endif()
+
 option(EINHEIT_BUILD_TESTS "Build the test suite" ON)
 option(EINHEIT_BUILD_ADAPTERS "Build the product adapters" ON)
 

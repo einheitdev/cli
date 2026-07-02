@@ -101,6 +101,19 @@ auto Execute(Context &ctx, const ParsedCommand &parsed)
                               spec.path)));
   }
 
+  // One role-gating code path for every front-end (gap #8). Parse
+  // rejects early for good UX, but the engine is the authoritative
+  // gate: a front-end that reaches Execute without a parse-time role
+  // check still can't run a command above the caller's role.
+  if (!RoleAllows(ctx.caller.role, spec.role)) {
+    rec.ok = false;
+    rec.outcome = "role forbidden";
+    Emit(ctx, rec);
+    return std::unexpected(MakeError(
+        EngineError::RoleForbidden,
+        std::format("command requires a higher role: {}", spec.path)));
+  }
+
   // One session-gating code path for every front-end (gap #8).
   if (spec.requires_session && (!ctx.session || !ctx.session->in_configure)) {
     rec.ok = false;

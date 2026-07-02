@@ -11,6 +11,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -244,31 +245,52 @@ auto ValidateLeaf(const PrimitiveSpec &ps, const std::string &value)
 
 }  // namespace
 
+namespace {
+
+// Shared body for LoadSchema / LoadSchemaFromString: build a Schema
+// from an already-parsed YAML document. Both entry points wrap this in
+// the same try/catch so a malformed document is always a SchemaError,
+// never an uncaught throw.
+auto BuildSchemaFromDoc(const YAML::Node &doc)
+    -> std::expected<std::shared_ptr<Schema>, Error<SchemaError>> {
+  if (!doc["version"] || !doc["product"]) {
+    return std::unexpected(MakeError(
+        SchemaError::MissingField, "version/product required"));
+  }
+  auto out = std::make_shared<Schema>();
+  out->version = doc["version"].as<std::uint32_t>();
+  out->product = doc["product"].as<std::string>();
+  if (doc["config"]) {
+    auto obj = ParseObject(doc["config"]);
+    if (!obj) return std::unexpected(obj.error());
+    out->root = std::move(*obj);
+  }
+  if (doc["types"] && doc["types"].IsMap()) {
+    for (const auto &kv : doc["types"]) {
+      auto child = ParseNode(kv.second);
+      if (!child) return std::unexpected(child.error());
+      out->types.emplace(kv.first.as<std::string>(),
+                         std::move(*child));
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+auto DefaultSchema() -> std::shared_ptr<const Schema> {
+  // A single immutable empty schema shared by every default handle.
+  // Function-local static: thread-safe init, no global-ctor ordering
+  // hazard. Const, so no caller can mutate the shared default.
+  static const std::shared_ptr<const Schema> kDefault =
+      std::make_shared<const Schema>();
+  return kDefault;
+}
+
 auto LoadSchema(const std::string &yaml_path)
     -> std::expected<std::shared_ptr<Schema>, Error<SchemaError>> {
   try {
-    auto doc = YAML::LoadFile(yaml_path);
-    if (!doc["version"] || !doc["product"]) {
-      return std::unexpected(MakeError(
-          SchemaError::MissingField, "version/product required"));
-    }
-    auto out = std::make_shared<Schema>();
-    out->version = doc["version"].as<std::uint32_t>();
-    out->product = doc["product"].as<std::string>();
-    if (doc["config"]) {
-      auto obj = ParseObject(doc["config"]);
-      if (!obj) return std::unexpected(obj.error());
-      out->root = std::move(*obj);
-    }
-    if (doc["types"] && doc["types"].IsMap()) {
-      for (const auto &kv : doc["types"]) {
-        auto child = ParseNode(kv.second);
-        if (!child) return std::unexpected(child.error());
-        out->types.emplace(kv.first.as<std::string>(),
-                           std::move(*child));
-      }
-    }
-    return out;
+    return BuildSchemaFromDoc(YAML::LoadFile(yaml_path));
   } catch (const YAML::Exception &e) {
     return std::unexpected(
         MakeError(SchemaError::YamlParseFailed, e.what()));
@@ -276,6 +298,23 @@ auto LoadSchema(const std::string &yaml_path)
     return std::unexpected(
         MakeError(SchemaError::ValidationFailed, e.what()));
   }
+}
+
+auto LoadSchemaFromString(std::string_view yaml_text)
+    -> std::expected<std::shared_ptr<Schema>, Error<SchemaError>> {
+  try {
+    return BuildSchemaFromDoc(YAML::Load(std::string(yaml_text)));
+  } catch (const YAML::Exception &e) {
+    return std::unexpected(
+        MakeError(SchemaError::YamlParseFailed, e.what()));
+  } catch (const std::exception &e) {
+    return std::unexpected(
+        MakeError(SchemaError::ValidationFailed, e.what()));
+  }
+}
+
+auto HasPath(const Schema &schema, const std::string &path) -> bool {
+  return Resolve(schema, path) != nullptr;
 }
 
 auto ValidatePath(const Schema &schema, const std::string &path,

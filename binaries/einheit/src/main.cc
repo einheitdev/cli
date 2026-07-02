@@ -4,6 +4,8 @@
 /// up the example adapter, and hands off to RunShell or RunOneshot.
 // Copyright (c) 2026 Einheit Networks
 
+#include <unistd.h>
+
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -11,6 +13,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include <CLI/CLI.hpp>
@@ -30,6 +33,8 @@
 #include "einheit/cli/render/theme.h"
 #include "einheit/cli/schema.h"
 #include "einheit/cli/shell.h"
+#include "einheit/cli/signals.h"
+#include "einheit/cli/supervisor.h"
 #include "einheit/cli/target_config.h"
 #include "einheit/cli/transport/inproc.h"
 #include "einheit/cli/transport/zmq_local.h"
@@ -332,7 +337,75 @@ auto HandleUse(const std::string &target_name) -> int {
   return 0;
 }
 
+// Pick a crash-log path: $HOME/.einheit/crash.log if HOME is set (the
+// dir is created best-effort), else a /tmp fallback. The fault handler
+// appends signal + last-command + backtrace here so a crash is always
+// diagnosable after the fact.
+auto CrashLogPath() -> std::string {
+  if (const char *home = std::getenv("HOME"); home != nullptr) {
+    const std::string dir = std::format("{}/.einheit", home);
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return std::format("{}/crash.log", dir);
+  }
+  return std::format("/tmp/einheit-crash-{}.log",
+                     static_cast<long>(::getpid()));
+}
+
+// The CLI body proper (arg parsing, setup, dispatch). Split out of
+// main so main can wrap it in a top-level catch — the final exception
+// boundary. Any std::exception that escapes every inner boundary lands
+// here as a clean diagnostic + exit, never a std::terminate.
+auto RunCli(int argc, char **argv) -> int;
+
 auto main(int argc, char **argv) -> int {
+  namespace signals = einheit::cli::signals;
+  // Contain half of crash safety, installed before anything else can
+  // fault: ignore SIGPIPE (a peer disconnect mid-write must never kill
+  // us) and install the fault handlers so any SEGV/ABRT/BUS/ILL/FPE is
+  // diagnosed (signal + last command + backtrace) then re-raised for a
+  // core dump. See SIGNAL_HANDLING.md.
+  signals::IgnoreSigpipe();
+  const std::string crash_log = CrashLogPath();
+  signals::InstallFaultHandlers(crash_log);
+
+  // Interactive crash supervision: when launched on a terminal (the SSH
+  // scenario), fork a thin supervisor that re-execs this binary and, if
+  // the shell dies from a fault signal, prints a clean notice pointing
+  // at the crash log instead of leaving the user at a dead prompt. The
+  // re-exec gives the child a fresh process image (no forked ZMQ I/O
+  // threads). Skipped when non-interactive (pipes, --replay, tests) or
+  // already supervised.
+  if (std::getenv("EINHEIT_SUPERVISED") == nullptr &&
+      ::isatty(STDIN_FILENO) == 1) {
+    ::setenv("EINHEIT_SUPERVISED", "1", 1);
+    einheit::cli::SupervisorOptions sopts;
+    sopts.crash_log_path = crash_log;
+    return einheit::cli::RunSupervised(
+        [argv]() -> int {
+          ::execv("/proc/self/exe", argv);
+          std::perror("einheit: exec (supervisor)");
+          return 127;
+        },
+        sopts);
+  }
+
+  // Top-level exception boundary: no failure in setup or dispatch may
+  // unwind past main and abort the process. The inner boundaries (shell
+  // loop, engine, transport, codec, render) catch and report first;
+  // this is the last net.
+  try {
+    return RunCli(argc, argv);
+  } catch (const std::exception &e) {
+    std::cerr << std::format("einheit: fatal: {}\n", e.what());
+    return 1;
+  } catch (...) {
+    std::cerr << "einheit: fatal: unexpected error\n";
+    return 1;
+  }
+}
+
+auto RunCli(int argc, char **argv) -> int {
   CLI::App app{"einheit — Einheit Networks CLI"};
   app.option_defaults()->ignore_case();
   app.allow_extras();

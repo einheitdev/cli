@@ -38,6 +38,7 @@
 #include "einheit/cli/render/pager.h"
 #include "einheit/cli/render/table.h"
 #include "einheit/cli/schema.h"
+#include "einheit/cli/signals.h"
 #include "einheit/cli/watch.h"
 #include "einheit/cli/workstation_state.h"
 
@@ -238,6 +239,28 @@ auto Dispatch(Shell &s, const ParsedCommand &parsed)
       return out;
     }
     return out;
+  }
+
+  // A near-miss like `set ip` — where `ip` isn't a schema path —
+  // otherwise falls through to the generic `set` and gets rejected by
+  // the session gate as "requires configure session", hiding the real
+  // problem (gap #6). Validate the target path against the schema up
+  // front, independent of session state, so the user sees "no such
+  // config path" and a pointer to `show schema`.
+  if ((spec.wire_command == "set" || spec.wire_command == "delete") &&
+      !parsed.args.empty()) {
+    const auto &schema = s.adapter->GetSchema();
+    // Only enforce when the adapter actually declares a schema. An
+    // empty schema means paths aren't known client-side (a minimal
+    // adapter, or one whose daemon owns the namespace) — defer to the
+    // daemon rather than reject a legitimate path.
+    if (!schema.root.fields.empty() &&
+        !schema::HasPath(schema, parsed.args[0])) {
+      return std::unexpected(MakeError(
+          ShellError::LoopFailed,
+          std::format("no such config path: {} — see `show schema`",
+                      parsed.args[0])));
+    }
   }
 
   // Everything from here — session gating, wire send, and session
@@ -621,6 +644,10 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
 
     const auto line = Expand(aliases, expanded);
     if (line.empty()) continue;
+    // Record the command about to run so that if a handler or renderer
+    // faults, the crash log names the exact input that triggered it
+    // (the s5 `set i<tab>` diagnosis).
+    signals::SetLastCommand(line);
     reader->AddHistory(line);
     if (record) {
       *record << line << '\n';

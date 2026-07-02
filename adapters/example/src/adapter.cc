@@ -4,9 +4,7 @@
 
 #include "adapters/example/adapter.h"
 
-#include <filesystem>
 #include <format>
-#include <fstream>
 #include <memory>
 #include <mutex>
 #include <ostream>
@@ -90,19 +88,13 @@ config:
 types: {}
 )";
 
-auto LoadBakedSchema() -> std::shared_ptr<Schema> {
-  // LoadSchema takes a path, so stage the baked YAML to tmp. Real
-  // adapters that already ship a schema file can read it directly.
-  const auto path =
-      std::filesystem::temp_directory_path() /
-      "einheit_example_schema.yaml";
-  {
-    std::ofstream f(path);
-    f << kSchemaYaml;
-  }
-  auto s = einheit::cli::schema::LoadSchema(path.string());
-  if (!s) return std::make_shared<Schema>();
-  return *s;
+auto LoadBakedSchema() -> einheit::cli::schema::SchemaHandle {
+  // Build the embedded schema in-process (no /tmp round-trip). A parse
+  // failure yields a default (empty, non-null) handle rather than a
+  // null pointer, so tab-completion can never deref null (gap #5).
+  auto s = einheit::cli::schema::LoadSchemaFromString(kSchemaYaml);
+  if (!s) return {};
+  return einheit::cli::schema::SchemaHandle(*s);
 }
 
 class ExampleAdapter : public ProductAdapter {
@@ -120,7 +112,7 @@ class ExampleAdapter : public ProductAdapter {
   }
 
   auto GetSchema() const -> const Schema & override {
-    return *schema_;
+    return schema_.Get();
   }
 
   auto ControlSocketPath() const -> std::string override {
@@ -314,7 +306,7 @@ class ExampleAdapter : public ProductAdapter {
   }
 
  private:
-  std::shared_ptr<Schema> schema_;
+  einheit::cli::schema::SchemaHandle schema_;
   mutable std::mutex series_mu_;
   mutable std::unordered_map<std::string, std::vector<double>>
       series_;

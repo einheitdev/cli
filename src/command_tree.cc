@@ -21,6 +21,8 @@ auto MakeError(CommandTreeError code, std::string message)
   return Error<CommandTreeError>{code, std::move(message)};
 }
 
+}  // namespace
+
 auto RoleAllows(RoleGate caller, RoleGate required) -> bool {
   if (required == RoleGate::AnyAuthenticated) return true;
   if (required == RoleGate::OperatorOrAdmin) {
@@ -29,8 +31,6 @@ auto RoleAllows(RoleGate caller, RoleGate required) -> bool {
   }
   return caller == RoleGate::AdminOnly;
 }
-
-}  // namespace
 
 auto Register(CommandTree &tree, CommandSpec spec)
     -> std::expected<void, Error<CommandTreeError>> {

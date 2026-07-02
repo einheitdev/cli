@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -113,10 +114,60 @@ struct Schema {
   std::unordered_map<std::string, std::unique_ptr<Node>> types;
 };
 
+/// The process-wide empty-but-valid default schema. Non-null by
+/// construction: a shared reference to a single immutable empty Schema
+/// (version 1, no product, empty root/types). Completion, validation,
+/// and description over it are all well-defined no-ops rather than a
+/// segfault. This is the guaranteed non-null fallback behind
+/// SchemaHandle — see gap #5 (the s5 `set i<tab>` SIGSEGV).
+/// @returns Shared pointer to the default schema; never null.
+auto DefaultSchema() -> std::shared_ptr<const Schema>;
+
+/// A guaranteed-non-null handle to a Schema.
+///
+/// Adapters store one of these instead of a bare
+/// `std::shared_ptr<Schema>` so that `GetSchema()` can never
+/// dereference null. Constructing from a null pointer substitutes
+/// DefaultSchema(); the invariant "the held pointer is non-null" holds
+/// for the handle's entire lifetime, by construction. This turns the
+/// null-schema crash class (#5) from a runtime SIGSEGV into an
+/// impossibility — a `try/catch` cannot catch a segfault, so the fix
+/// must be structural, not a guard.
+class SchemaHandle {
+ public:
+  /// Default handle refers to the empty DefaultSchema().
+  SchemaHandle() : ptr_(DefaultSchema()) {}
+  /// Wrap a loaded schema. A null argument falls back to
+  /// DefaultSchema() rather than storing null.
+  SchemaHandle(std::shared_ptr<const Schema> schema)  // NOLINT: implicit
+      : ptr_(schema ? std::move(schema) : DefaultSchema()) {}
+  /// Convenience overload for the non-const loader result.
+  SchemaHandle(std::shared_ptr<Schema> schema)  // NOLINT: implicit
+      : ptr_(schema ? std::shared_ptr<const Schema>(std::move(schema))
+                    : DefaultSchema()) {}
+  /// The referenced schema. Never null.
+  auto Get() const -> const Schema & { return *ptr_; }
+  /// Ref-qualified accessor mirroring `GetSchema()`'s return type.
+  auto operator*() const -> const Schema & { return *ptr_; }
+  auto operator->() const -> const Schema * { return ptr_.get(); }
+
+ private:
+  std::shared_ptr<const Schema> ptr_;
+};
+
 /// Parse a YAML schema document from disk.
 /// @param yaml_path Path to the schema YAML file.
 /// @returns Parsed Schema or SchemaError.
 auto LoadSchema(const std::string &yaml_path)
+    -> std::expected<std::shared_ptr<Schema>, Error<SchemaError>>;
+
+/// Parse a YAML schema document held in memory. Lets an adapter embed
+/// its schema as a string literal and build it in-code, without the
+/// write-to-/tmp-then-reload round-trip the adapters use today (gap
+/// #5). Same parser, same errors as LoadSchema.
+/// @param yaml_text The schema YAML document text.
+/// @returns Parsed Schema or SchemaError.
+auto LoadSchemaFromString(std::string_view yaml_text)
     -> std::expected<std::shared_ptr<Schema>, Error<SchemaError>>;
 
 /// Validate a user-entered value at the given dotted path against
@@ -128,6 +179,16 @@ auto LoadSchema(const std::string &yaml_path)
 auto ValidatePath(const Schema &schema, const std::string &path,
                   const std::string &value)
     -> std::expected<void, Error<SchemaError>>;
+
+/// Whether `path` resolves to a real node in the schema tree. Lets the
+/// shell reject a near-miss like `set ip` (where `ip` isn't a schema
+/// path) with a clear "no such config path" message, instead of
+/// letting it fall through to the generic `set` and misreport a missing
+/// configure session (gap #6).
+/// @param schema Schema to walk.
+/// @param path Dotted path to resolve.
+/// @returns true iff the path names a node in the schema.
+auto HasPath(const Schema &schema, const std::string &path) -> bool;
 
 /// Compute tab-completion candidates for a partial dotted path.
 /// @param schema Schema to walk.

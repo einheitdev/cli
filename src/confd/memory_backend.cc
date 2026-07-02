@@ -11,8 +11,7 @@
 namespace einheit::cli::confd {
 
 MemoryBackend::MemoryBackend(std::shared_ptr<const schema::Schema> schema)
-    : schema_(schema ? std::move(schema)
-                     : std::make_shared<const schema::Schema>()) {}
+    : schema_(std::move(schema)) {}
 
 auto MemoryBackend::Apply(const Candidate &candidate)
     -> std::expected<CommitId, Error<ApplyError>> {
@@ -34,7 +33,7 @@ auto MemoryBackend::ReadRunning() -> Config {
 }
 
 auto MemoryBackend::Schema() const -> const schema::Schema & {
-  return *schema_;
+  return schema_.Get();
 }
 
 auto MemoryBackend::DeviceState() const -> Config {
