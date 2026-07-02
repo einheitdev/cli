@@ -17,6 +17,29 @@ auto MakeError(CodecError code, std::string message)
   return Error<CodecError>{code, std::move(message)};
 }
 
+// Unpack with allocation bounds derived from the input length. Every
+// msgpack container / string / binary needs at least one byte per
+// element on the wire, so no legitimate message can declare more
+// elements than there are bytes present — capping each length to
+// `bytes.size()` never rejects a valid frame but makes a hostile
+// length prefix (a 5-byte header claiming a 128 GB array) throw instead
+// of driving an unbounded allocation. Nesting depth is capped too.
+// This is the "bounds-check everything from outside the process"
+// invariant for the protocol boundary — a malformed daemon reply must
+// be a clean error, never a memory-exhaustion crash.
+auto BoundedUnpack(std::span<const std::uint8_t> bytes)
+    -> msgpack::object_handle {
+  const std::size_t n = bytes.size();
+  const msgpack::unpack_limit limit(
+      /*array=*/n, /*map=*/n, /*str=*/n, /*bin=*/n, /*ext=*/n,
+      /*depth=*/64);
+  std::size_t off = 0;
+  bool referenced = false;
+  return msgpack::unpack(
+      reinterpret_cast<const char *>(bytes.data()), n, off, referenced,
+      nullptr, nullptr, limit);
+}
+
 }  // namespace
 
 auto EncodeRequest(const Request &req)
@@ -57,8 +80,7 @@ auto EncodeRequest(const Request &req)
 auto DecodeRequest(std::span<const std::uint8_t> bytes)
     -> std::expected<Request, Error<CodecError>> {
   try {
-    msgpack::object_handle oh = msgpack::unpack(
-        reinterpret_cast<const char *>(bytes.data()), bytes.size());
+    msgpack::object_handle oh = BoundedUnpack(bytes);
     const msgpack::object &obj = oh.get();
     if (obj.type != msgpack::type::MAP) {
       return std::unexpected(
@@ -146,8 +168,7 @@ auto EncodeResponse(const Response &res)
 auto DecodeResponse(std::span<const std::uint8_t> bytes)
     -> std::expected<Response, Error<CodecError>> {
   try {
-    msgpack::object_handle oh = msgpack::unpack(
-        reinterpret_cast<const char *>(bytes.data()), bytes.size());
+    msgpack::object_handle oh = BoundedUnpack(bytes);
     const msgpack::object &obj = oh.get();
     if (obj.type != msgpack::type::MAP) {
       return std::unexpected(MakeError(
@@ -233,8 +254,7 @@ auto DecodeEventBody(const std::string &topic,
                      std::span<const std::uint8_t> bytes)
     -> std::expected<Event, Error<CodecError>> {
   try {
-    msgpack::object_handle oh = msgpack::unpack(
-        reinterpret_cast<const char *>(bytes.data()), bytes.size());
+    msgpack::object_handle oh = BoundedUnpack(bytes);
     const msgpack::object &obj = oh.get();
     if (obj.type != msgpack::type::MAP) {
       return std::unexpected(MakeError(

@@ -26,3 +26,31 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  # Sanitizer gate: the "prevent" half of crash safety. The full suite
+  # must pass clean under AddressSanitizer + UndefinedBehaviorSanitizer
+  # so null derefs, use-after-free, buffer overflows, and UB fail the
+  # build instead of shipping (cli-harden acceptance gate).
+  sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libzmq3-dev libsodium-dev libyaml-cpp-dev \
+            libreadline-dev pkg-config cmake ninja-build clang mold
+
+      - name: Configure (ASan + UBSan)
+        run: cmake --preset asan
+
+      - name: Build
+        run: cmake --build build-asan --parallel
+
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:allocator_may_return_null=0
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --test-dir build-asan --output-on-failure

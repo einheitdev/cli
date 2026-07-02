@@ -55,6 +55,28 @@ class NoopAdapter : public ProductAdapter {
   schema::Schema schema_;
 };
 
+// Adapter that declares a real schema (one `hostname` field), so the
+// shell's client-side path check has something to resolve against.
+class SchemaAdapter : public NoopAdapter {
+ public:
+  SchemaAdapter() {
+    auto s = schema::LoadSchemaFromString(R"(
+version: 1
+product: test
+config:
+  hostname:
+    type: string
+)");
+    if (s) handle_ = schema::SchemaHandle(*s);
+  }
+  auto GetSchema() const -> const schema::Schema & override {
+    return handle_.Get();
+  }
+
+ private:
+  schema::SchemaHandle handle_;
+};
+
 // Minimal daemon model that implements just enough of the lifecycle
 // to exercise Dispatch.
 struct DaemonState {
@@ -118,6 +140,25 @@ auto BuildShell(const FakeDaemon &d)
   if (auto r = (*tx)->Connect(); !r) return {std::move(s), false};
   s.tx = std::move(*tx);
   s.adapter = std::make_unique<NoopAdapter>();
+  return {std::move(s), true};
+}
+
+// Like BuildShell, but attaches an adapter that declares a real schema
+// so the client-side `set <path>` check has fields to resolve against.
+auto BuildShellWithSchema(const FakeDaemon &d)
+    -> std::pair<Shell, bool> {
+  Shell s;
+  s.caller.role = RoleGate::AdminOnly;
+  s.caller.user = "test";
+  if (auto r = RegisterGlobals(s.tree); !r) return {std::move(s), false};
+  transport::ZmqLocalConfig cfg;
+  cfg.control_endpoint = d.ControlEndpoint();
+  cfg.event_endpoint = d.EventEndpoint();
+  auto tx = transport::NewZmqLocalTransport(cfg);
+  if (!tx) return {std::move(s), false};
+  if (auto r = (*tx)->Connect(); !r) return {std::move(s), false};
+  s.tx = std::move(*tx);
+  s.adapter = std::make_unique<SchemaAdapter>();
   return {std::move(s), true};
 }
 
@@ -204,6 +245,62 @@ TEST(SessionLifecycle, ExitIsLocal) {
   EXPECT_TRUE(r->handled_locally);
   EXPECT_TRUE(r->exit_shell);
   EXPECT_FALSE(r->response.has_value());
+}
+
+// gap #6: a near-miss `set <path>` where the path isn't in the schema
+// must report "no such config path" — not fall through to the generic
+// `set` and misreport a missing configure session. Checked before the
+// session gate, so the message is correct even inside a session.
+TEST(SessionLifecycle, SetUnknownPathReportsNoSuchPath) {
+  DaemonState st;
+  auto daemon = MakeDaemon(st);
+  auto [s, ok] = BuildShellWithSchema(daemon);
+  ASSERT_TRUE(ok);
+  ASSERT_TRUE(Exec(s, {"configure"}).has_value());
+
+  auto r = Exec(s, {"set", "ip", "1.2.3.4"});
+  ASSERT_FALSE(r.has_value());
+  EXPECT_NE(r.error().message.find("no such config path"),
+            std::string::npos)
+      << r.error().message;
+  // Never reached the daemon.
+  std::lock_guard<std::mutex> lk(st.mu);
+  EXPECT_TRUE(st.sets.empty());
+}
+
+// The same near-miss out of a session reports the path problem, not
+// "requires configure session" — the specific misreport gap #6 calls
+// out.
+TEST(SessionLifecycle, SetUnknownPathBeatsSessionError) {
+  DaemonState st;
+  auto daemon = MakeDaemon(st);
+  auto [s, ok] = BuildShellWithSchema(daemon);
+  ASSERT_TRUE(ok);
+
+  auto r = Exec(s, {"set", "ip", "1.2.3.4"});
+  ASSERT_FALSE(r.has_value());
+  EXPECT_NE(r.error().message.find("no such config path"),
+            std::string::npos)
+      << r.error().message;
+  EXPECT_EQ(r.error().message.find("configure session"),
+            std::string::npos)
+      << "should report the path, not the session";
+}
+
+// A known path still dispatches normally (the check is a filter, not a
+// wall).
+TEST(SessionLifecycle, SetKnownPathStillWorks) {
+  DaemonState st;
+  auto daemon = MakeDaemon(st);
+  auto [s, ok] = BuildShellWithSchema(daemon);
+  ASSERT_TRUE(ok);
+  ASSERT_TRUE(Exec(s, {"configure"}).has_value());
+
+  auto r = Exec(s, {"set", "hostname", "einheit-1"});
+  ASSERT_TRUE(r.has_value()) << r.error().message;
+  std::lock_guard<std::mutex> lk(st.mu);
+  ASSERT_EQ(st.sets.size(), 1u);
+  EXPECT_EQ(st.sets[0].first, "hostname");
 }
 
 }  // namespace einheit::cli::shell

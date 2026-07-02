@@ -18,6 +18,8 @@
 
 #include <replxx.hxx>
 
+#include "einheit/cli/no_throw.h"
+
 namespace einheit::cli {
 namespace {
 
@@ -54,65 +56,55 @@ class ReplxxReader : public LineReader {
  public:
   ReplxxReader() {
     rx_.set_word_break_characters(" \t");
-    rx_.set_completion_callback(
+    // Every callback handed to replxx is wrapped in NoThrow at the
+    // registration site (gap #7). An exception must NEVER cross back
+    // into replxx's C input loop — it would std::terminate the whole
+    // CLI. The guard is applied once, here, so a new callback can't
+    // silently reintroduce the crash by forgetting a try/catch.
+    rx_.set_completion_callback(NoThrow(
         [this](const std::string &ctx, int &len)
             -> replxx::Replxx::completions_t {
-          // An exception must NEVER cross back into replxx's input
-          // loop — it would std::terminate the whole CLI. A bad
-          // completion is a no-op, never a crash.
-          try {
-            if (!completion_fn_) return {};
-            const auto preceding = Tokenize(std::string(
-                ctx.data(), ctx.data() + ctx.size() - len));
-            const std::string partial(
-                ctx.data() + ctx.size() - len, len);
-            replxx::Replxx::completions_t out;
-            for (const auto &cand :
-                 completion_fn_(preceding, partial)) {
-              out.emplace_back(cand.c_str());
-            }
-            return out;
-          } catch (...) {
-            return {};
+          if (!completion_fn_) return {};
+          const auto preceding = Tokenize(std::string(
+              ctx.data(), ctx.data() + ctx.size() - len));
+          const std::string partial(
+              ctx.data() + ctx.size() - len, len);
+          replxx::Replxx::completions_t out;
+          for (const auto &cand :
+               completion_fn_(preceding, partial)) {
+            out.emplace_back(cand.c_str());
           }
-        });
-    rx_.set_hint_callback(
+          return out;
+        }));
+    rx_.set_hint_callback(NoThrow(
         [this](const std::string &ctx, int &len,
                replxx::Replxx::Color &color)
             -> replxx::Replxx::hints_t {
           color = replxx::Replxx::Color::GRAY;
-          try {
-            if (!help_fn_) return {};
-            // Empty buffer — don't hint. Otherwise the completion
-            // set expands to every registered verb and we'd pick
-            // an arbitrary one, which reads as noise.
-            if (ctx.empty() && len == 0) return {};
-            const auto preceding = Tokenize(std::string(
-                ctx.data(), ctx.data() + ctx.size() - len));
-            const std::string partial(
-                ctx.data() + ctx.size() - len, len);
-            // No partial at the cursor (trailing whitespace) —
-            // user isn't asking for a specific completion yet.
-            if (partial.empty()) return {};
-            auto candidates = help_fn_(preceding, partial);
-            if (candidates.empty()) return {};
-            replxx::Replxx::hints_t out;
-            out.emplace_back(candidates.front().name.c_str());
-            return out;
-          } catch (...) {
-            return {};
-          }
-        });
+          if (!help_fn_) return {};
+          // Empty buffer — don't hint. Otherwise the completion
+          // set expands to every registered verb and we'd pick
+          // an arbitrary one, which reads as noise.
+          if (ctx.empty() && len == 0) return {};
+          const auto preceding = Tokenize(std::string(
+              ctx.data(), ctx.data() + ctx.size() - len));
+          const std::string partial(
+              ctx.data() + ctx.size() - len, len);
+          // No partial at the cursor (trailing whitespace) —
+          // user isn't asking for a specific completion yet.
+          if (partial.empty()) return {};
+          auto candidates = help_fn_(preceding, partial);
+          if (candidates.empty()) return {};
+          replxx::Replxx::hints_t out;
+          out.emplace_back(candidates.front().name.c_str());
+          return out;
+        }));
     // `?` mid-line opens an inline help popup via the HelpFn.
-    rx_.bind_key('?',
-                 [this](char32_t) -> replxx::Replxx::ACTION_RESULT {
-                   // Guard: a throw here would terminate the CLI.
-                   try {
-                     ShowHelpOverlay();
-                   } catch (...) {
-                   }
-                   return replxx::Replxx::ACTION_RESULT::CONTINUE;
-                 });
+    rx_.bind_key('?', NoThrow(
+        [this](char32_t) -> replxx::Replxx::ACTION_RESULT {
+          ShowHelpOverlay();
+          return replxx::Replxx::ACTION_RESULT::CONTINUE;
+        }));
   }
 
   auto ReadLine(const std::string &prompt)

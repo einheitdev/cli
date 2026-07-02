@@ -155,6 +155,43 @@ TEST(Engine, SetWithoutConfigureRejectedBeforeWire) {
   EXPECT_TRUE(f.state.sets.empty());
 }
 
+// gap #8: the engine is the authoritative role gate. Even when a
+// command reaches Execute (parsed elsewhere), a caller whose role is
+// below the command's gate is rejected before anything crosses the
+// wire — role and session are gated on one code path.
+TEST(Engine, RoleForbiddenRejectedBeforeWire) {
+  Fixture f;
+  ASSERT_TRUE(f.tx);
+  // `configure` is AdminOnly; parse it as admin, then drive Execute
+  // with a downgraded caller to isolate the engine's own role gate.
+  auto configure = ParseIn(f.tree, {"configure"});
+  auto ctx = f.Ctx();
+  ctx.caller.role = RoleGate::AnyAuthenticated;
+
+  auto r = Execute(ctx, configure);
+  ASSERT_FALSE(r.has_value());
+  EXPECT_EQ(r.error().code, EngineError::RoleForbidden);
+  // The session was never opened and nothing hit the daemon.
+  EXPECT_FALSE(f.session.in_configure);
+  // The rejection is audited.
+  ASSERT_FALSE(f.audit_log.empty());
+  EXPECT_EQ(f.audit_log.back().outcome, "role forbidden");
+  EXPECT_FALSE(f.audit_log.back().ok);
+}
+
+// An operator may run an OperatorOrAdmin command but not an AdminOnly
+// one — the gate honours the ladder, not just admin/deny.
+TEST(Engine, OperatorRoleGatedByLadder) {
+  Fixture f;
+  ASSERT_TRUE(f.tx);
+  auto configure = ParseIn(f.tree, {"configure"});  // AdminOnly
+  auto ctx = f.Ctx();
+  ctx.caller.role = RoleGate::OperatorOrAdmin;
+  auto r = Execute(ctx, configure);
+  ASSERT_FALSE(r.has_value());
+  EXPECT_EQ(r.error().code, EngineError::RoleForbidden);
+}
+
 TEST(Engine, RollbackCandidateClearsSession) {
   Fixture f;
   ASSERT_TRUE(f.tx);

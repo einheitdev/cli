@@ -229,10 +229,17 @@ auto ApplyAndRecord(Runtime::Impl &d, const protocol::Request &req,
   c.candidate = candidate;
   c.author = author;
   c.timestamp = audit::NowTimestamp();
+  const CommitId new_id = c.id;
+  // `candidate` may be a reference *into* d.history — rollback
+  // re-applies a historical commit's stored candidate. push_back can
+  // reallocate d.history, freeing the storage `candidate` points at,
+  // so we must not read `candidate` afterwards. Read running state
+  // from our own copy (c.candidate) and capture the id before the
+  // move. (ASan heap-use-after-free, gap: memory-safety invariants.)
+  d.running = c.candidate.values;
   d.history.push_back(std::move(c));
-  d.running = candidate.values;
   d.Persist(req);
-  return c.id;
+  return new_id;
 }
 
 // Fire the auto-revert: re-apply the pre-confirm configuration and
