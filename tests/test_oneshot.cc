@@ -82,7 +82,11 @@ TEST(RunOneshot, DispatchesAndReturnsResponse) {
   einheit::cli::testing::FakeDaemon daemon(
       [](const protocol::Request &req) {
         protocol::Response r;
-        EXPECT_EQ(req.command, "show_status");
+        // RunOneshot sends a `describe` catalog handshake before the
+        // real command; only assert on the dispatched verb.
+        if (req.command != "describe") {
+          EXPECT_EQ(req.command, "show_status");
+        }
         r.status = protocol::ResponseStatus::Ok;
         return r;
       });

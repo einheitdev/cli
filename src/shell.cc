@@ -19,7 +19,6 @@
 #include <format>
 #include <fstream>
 #include <iostream>
-#include <random>
 #include <ranges>
 #include <sstream>
 #include <string>
@@ -30,6 +29,7 @@
 #include "einheit/cli/aliases.h"
 #include "einheit/cli/audit.h"
 #include "einheit/cli/auth.h"
+#include "einheit/cli/engine.h"
 #include "einheit/cli/history.h"
 #include "einheit/cli/line_reader.h"
 #include "einheit/cli/protocol/envelope.h"
@@ -56,12 +56,15 @@ auto MakeError(ShellError code, std::string message)
   return Error<ShellError>{code, std::move(message)};
 }
 
-auto NewRequestId() -> std::string {
-  // Not a true UUID — MessagePack only carries it as a string and
-  // the daemon just echoes it for correlation. A random hex blob
-  // gets us uniqueness within a session.
-  static thread_local std::mt19937_64 rng{std::random_device{}()};
-  return std::format("{:016x}{:016x}", rng(), rng());
+// Borrow the shell's transport, session, and identity into an engine
+// context. The engine threads the session and does the wire work; the
+// shell keeps front-end concerns (health, stats, rendering).
+auto MakeEngineContext(Shell &s) -> engine::Context {
+  engine::Context ctx;
+  ctx.tx = s.tx.get();
+  ctx.session = &s.session;
+  ctx.caller = s.caller;
+  return ctx;
 }
 
 auto StatusBar(const Shell &s, const render::Theme &theme)
@@ -167,29 +170,6 @@ auto PromptFor(const Shell &s, const ProductMetadata &meta,
                      reset);
 }
 
-auto BuildRequest(const ParsedCommand &parsed, const Shell &s)
-    -> protocol::Request {
-  protocol::Request req;
-  req.id = NewRequestId();
-  req.command = parsed.spec->wire_command;
-  req.args = parsed.args;
-  audit::StampIdentity(s.caller, req.user, req.role);
-  if (parsed.spec->requires_session && s.session.session_id) {
-    req.session_id = *s.session.session_id;
-  }
-  return req;
-}
-
-// Extract the daemon-issued session id out of a commit/configure
-// Response. The fake daemon encodes it in the `data` blob — for now
-// we accept any non-empty string there as the id. Real adapters
-// decode via their own response shapes.
-auto ExtractSessionIdFromData(
-    const std::vector<std::uint8_t> &bytes) -> std::optional<std::string> {
-  if (bytes.empty()) return std::nullopt;
-  return std::string(bytes.begin(), bytes.end());
-}
-
 }  // namespace
 
 auto Dispatch(Shell &s, const ParsedCommand &parsed)
@@ -210,7 +190,10 @@ auto Dispatch(Shell &s, const ParsedCommand &parsed)
       // candidate session and return to operational; the second
       // exit from operational closes the shell.
       if (s.session.in_configure) {
-        // Ask the daemon to drop the candidate server-side too.
+        // Ask the daemon to drop the candidate server-side too, via
+        // the same engine path a `rollback candidate` would take.
+        // Clear locally regardless of the wire result so exit always
+        // leaves operational mode.
         ParsedCommand rb;
         CommandSpec rb_spec;
         rb_spec.path = "rollback candidate";
@@ -219,9 +202,10 @@ auto Dispatch(Shell &s, const ParsedCommand &parsed)
         rb_spec.role = RoleGate::AdminOnly;
         rb.spec = &rb_spec;
         rb.args = {"candidate"};
-        auto req = BuildRequest(rb, s);
         using namespace std::chrono_literals;
-        (void)s.tx->SendRequest(req, 2s);
+        auto ctx = MakeEngineContext(s);
+        ctx.timeout = 2s;
+        (void)engine::Execute(ctx, rb);
         ClearSession(s.session);
       } else {
         out.exit_shell = true;
@@ -256,47 +240,35 @@ auto Dispatch(Shell &s, const ParsedCommand &parsed)
     return out;
   }
 
-  // Session invariants before sending.
-  if (spec.requires_session && !s.session.in_configure) {
-    return std::unexpected(MakeError(
-        ShellError::LoopFailed,
-        std::format("command requires 'configure' session: {}",
-                    spec.path)));
+  // Everything from here — session gating, wire send, and session
+  // threading — is the engine's job. The shell only translates the
+  // outcome into transport-health chips and its DispatchResult.
+  auto ctx = MakeEngineContext(s);
+  using namespace std::chrono_literals;
+  ctx.timeout = 30s;
+  auto outcome = engine::Execute(ctx, parsed);
+  if (!outcome) {
+    // Pre-wire rejection (session required / no transport); health
+    // unchanged since nothing crossed the wire.
+    return std::unexpected(
+        MakeError(ShellError::LoopFailed, outcome.error().message));
   }
 
-  auto req = BuildRequest(parsed, s);
-  using namespace std::chrono_literals;
-  const auto t0 = std::chrono::steady_clock::now();
-  auto resp = s.tx->SendRequest(req, 30s);
-  s.health.last_rtt =
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - t0);
-  if (!resp) {
-    s.health.status =
-        resp.error().code == transport::TransportError::Timeout
-            ? Shell::Health::Status::Timeout
-            : Shell::Health::Status::Failed;
+  s.health.last_rtt = outcome->rtt;
+  if (outcome->wire == engine::WireStatus::Timeout) {
+    s.health.status = Shell::Health::Status::Timeout;
     return std::unexpected(
-        MakeError(ShellError::LoopFailed, resp.error().message));
+        MakeError(ShellError::LoopFailed, outcome->error_message));
+  }
+  if (outcome->wire == engine::WireStatus::Failed) {
+    s.health.status = Shell::Health::Status::Failed;
+    return std::unexpected(
+        MakeError(ShellError::LoopFailed, outcome->error_message));
   }
   s.health.has_response = true;
   s.health.status = Shell::Health::Status::Ok;
 
-  // Update session state on lifecycle verbs.
-  if (resp->status == protocol::ResponseStatus::Ok) {
-    if (spec.wire_command == "configure") {
-      s.session.in_configure = true;
-      s.session.session_id = ExtractSessionIdFromData(resp->data);
-    } else if (spec.wire_command == "commit" ||
-               spec.path == "rollback candidate") {
-      ClearSession(s.session);
-    } else if (spec.wire_command == "rollback" ||
-               spec.wire_command == "rollback_previous") {
-      // rollback previous / rollback to N don't touch the session.
-    }
-  }
-
-  out.response = std::move(*resp);
+  out.response = std::move(outcome->response);
   return out;
 }
 
@@ -400,7 +372,7 @@ auto MergeCatalog(CommandTree &tree,
 auto HandshakeCatalog(Shell &s) -> int {
   if (!s.tx) return 0;
   protocol::Request req;
-  req.id = NewRequestId();
+  req.id = engine::NewRequestId();
   req.command = "describe";
   audit::StampIdentity(s.caller, req.user, req.role);
   auto resp = s.tx->SendRequest(req, std::chrono::seconds(2));

@@ -76,6 +76,18 @@ auto RegisterGlobals(CommandTree &tree)
            RoleGate::AdminOnly),
       Make("commit", "commit", "Apply the candidate configuration",
            RoleGate::AdminOnly, true),
+      // commit-confirmed: apply AND arm a server-side auto-revert timer.
+      // The anti-lockout feature — if `confirm` doesn't arrive within
+      // the window, confd rolls back automatically.
+      WithArg(Make("commit confirmed", "commit_confirmed",
+                   "Apply, then auto-revert unless confirmed in time",
+                   RoleGate::AdminOnly, true),
+              "minutes", "Minutes to wait for `confirm`"),
+      // Confirm an outstanding commit-confirmed window. No session
+      // required — you reconnect after being locked out and confirm.
+      Make("confirm", "confirm",
+           "Confirm a pending commit-confirmed (cancel auto-revert)",
+           RoleGate::AdminOnly),
       Make("rollback candidate", "rollback",
            "Discard the candidate session", RoleGate::AdminOnly,
            true),
@@ -86,6 +98,12 @@ auto RegisterGlobals(CommandTree &tree)
       // empty args.
       Make("rollback previous", "rollback_previous",
            "Roll back to the previous commit", RoleGate::AdminOnly),
+      // Roll back to a specific committed revision by id. Distinct wire
+      // verb so the id survives path-token stripping.
+      WithArg(Make("rollback to", "rollback_to",
+                   "Re-apply a specific committed revision",
+                   RoleGate::AdminOnly),
+              "id", "Commit id from `show commits`"),
       Make("set", "set",
            "Set a candidate-config value at a schema path",
            RoleGate::AdminOnly, true),
