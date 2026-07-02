@@ -18,6 +18,8 @@
 #include "adapters/example/adapter.h"
 #include "adapters/hd_relay/adapter.h"
 #include "einheit/cli/command_tree.h"
+#include "einheit/cli/confd/memory_backend.h"
+#include "einheit/cli/confd/runtime.h"
 #include "einheit/cli/curve_keys.h"
 #include "einheit/cli/globals.h"
 #include "einheit/cli/learning_daemon.h"
@@ -28,6 +30,7 @@
 #include "einheit/cli/schema.h"
 #include "einheit/cli/shell.h"
 #include "einheit/cli/target_config.h"
+#include "einheit/cli/transport/inproc.h"
 #include "einheit/cli/transport/zmq_local.h"
 #include "einheit/cli/transport/zmq_remote.h"
 #include "einheit/cli/workstation_state.h"
@@ -126,6 +129,45 @@ auto MakeTransport(const einheit::cli::ProductAdapter &adapter,
     return nullptr;
   }
   return std::move(*tx);
+}
+
+// Run the shell embedded in-process against a confd Runtime — the
+// single-binary, direct-to-hardware path (gap #3). The CLI, the config
+// runtime, and a (fake) ConfigBackend all live in one process behind an
+// in-proc transport; it is the exact same Runtime::HandleRequest a
+// standalone ZMQ daemon would serve. s.adapter must already be set (its
+// schema backs the runtime); it outlives everything created here.
+auto RunConfdEmbedded(einheit::cli::shell::Shell &s,
+                      const std::string &state_dir) -> int {
+  using namespace einheit::cli;
+  // Non-owning view of the adapter's schema (the adapter outlives us).
+  std::shared_ptr<const schema::Schema> schema(
+      &s.adapter->GetSchema(), [](const schema::Schema *) {});
+  confd::MemoryBackend backend(schema);
+  confd::RuntimeOptions opts;
+  opts.state_dir = state_dir;
+  confd::Runtime runtime(backend, opts);
+
+  auto tx = transport::NewInProcTransport(
+      [&runtime](const protocol::Request &req) {
+        return runtime.HandleRequest(req);
+      });
+  if (auto r = tx->Connect(); !r) {
+    std::cerr << std::format("confd: {}\n", r.error().message);
+    return 1;
+  }
+  s.tx = std::move(tx);
+
+  auto rc = RunShell(s);
+  // Tear down before returning so the runtime's timer thread is joined
+  // while the adapter (schema) is still alive. Drop the transport too,
+  // since its handler captured the runtime by reference.
+  s.tx.reset();
+  if (!rc) {
+    std::cerr << std::format("shell: {}\n", rc.error().message);
+    return 1;
+  }
+  return 0;
 }
 
 }  // namespace
@@ -310,6 +352,12 @@ auto main(int argc, char **argv) -> int {
   app.add_flag("--learn", learn,
                "Run against an in-process stub daemon "
                "(no real appliance needed)");
+  bool confd_embedded = false;
+  app.add_flag("--confd", confd_embedded,
+               "Run embedded: an in-process confd config runtime with a "
+               "fake ConfigBackend, direct-to-hardware, no daemon. "
+               "Exercises the real configure/commit/rollback/confirm "
+               "lifecycle in a single binary.");
   app.add_flag("--trace", trace,
                "Print wire traffic on stderr (best with --learn)");
   bool force_light = false;
@@ -420,6 +468,11 @@ auto main(int argc, char **argv) -> int {
     ::setenv("EINHEIT_ROLE", role_override.c_str(), 1);
   }
 
+  if (learn && confd_embedded) {
+    std::cerr << "--learn and --confd are mutually exclusive\n";
+    return 1;
+  }
+
   if (*key_gen) return HandleKeyGenerate(key_name);
   if (*use_cmd) return HandleUse(use_name);
   if (*init_cmd) return HandleInit();
@@ -482,7 +535,9 @@ auto main(int argc, char **argv) -> int {
       return 1;
     }
     tx = std::move(*built);
-  } else {
+  } else if (!confd_embedded) {
+    // Embedded confd wires its own in-proc transport later, after the
+    // adapter (whose schema backs the runtime) is in place.
     tx = MakeTransport(*adapter, target,
                         endpoint_override,
                         event_endpoint_override);
@@ -562,6 +617,19 @@ auto main(int argc, char **argv) -> int {
   if (learn) {
     s.caller.user = "learner";
     s.caller.role = RoleGate::AdminOnly;
+  }
+
+  // Embedded confd: the in-proc transport has no SO_PEERCRED, so grant
+  // the local operator admin (mirrors --learn) and drive the runtime.
+  if (confd_embedded) {
+    s.learning_mode = false;
+    if (s.caller.user.empty()) s.caller.user = "confd-local";
+    s.caller.role = RoleGate::AdminOnly;
+    std::string state_dir;
+    if (const char *home = std::getenv("HOME"); home) {
+      state_dir = std::format("{}/.einheit/confd", home);
+    }
+    return RunConfdEmbedded(s, state_dir);
   }
 
   const auto leftovers = app.remaining();

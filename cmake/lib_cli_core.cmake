@@ -7,6 +7,11 @@ add_library(cli_core_obj OBJECT
   src/command_tree.cc
   src/globals.cc
   src/session.cc
+  src/engine.cc
+  src/confd/runtime.cc
+  src/confd/memory_backend.cc
+  src/confd/store.cc
+  src/confd/zmq_server.cc
   src/shell.cc
   src/watch.cc
   src/shell_escape.cc

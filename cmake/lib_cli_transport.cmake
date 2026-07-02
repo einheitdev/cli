@@ -4,6 +4,7 @@ add_library(cli_transport_obj OBJECT
   src/transport/zmq_local.cc
   src/transport/zmq_remote.cc
   src/transport/oneshot.cc
+  src/transport/inproc.cc
 )
 
 target_include_directories(cli_transport_obj
