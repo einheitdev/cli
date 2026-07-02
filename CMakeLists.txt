@@ -115,6 +115,7 @@ include("cmake/lib_cli_core.cmake")
 if(EINHEIT_BUILD_ADAPTERS)
   add_subdirectory(adapters/example)
   add_subdirectory(adapters/hd_relay)
+  add_subdirectory(adapters/takt)
 endif()
 
 # Binaries.
