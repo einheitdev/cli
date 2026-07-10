@@ -129,6 +129,9 @@ endif()
 
 option(EINHEIT_BUILD_TESTS "Build the test suite" ON)
 option(EINHEIT_BUILD_ADAPTERS "Build the product adapters" ON)
+option(EINHEIT_NO_ZMQ
+  "Build without ZMQ/CurveZMQ — embedded in-proc consumers that \
+cross-compile without libzmq/libsodium" OFF)
 
 # Third-party libraries.
 include("cmake/3rd_party_libs/fetch.cmake")
@@ -146,8 +149,13 @@ if(EINHEIT_BUILD_ADAPTERS)
   add_subdirectory(adapters/takt)
 endif()
 
-# Binaries.
-include("cmake/einheit_binary.cmake")
+# Binaries. The appliance binary links the bundled adapters, so it
+# is only buildable when they are — a sub-build consumer that sets
+# EINHEIT_BUILD_ADAPTERS=OFF links the framework libraries and
+# ships its own main().
+if(EINHEIT_BUILD_ADAPTERS)
+  include("cmake/einheit_binary.cmake")
+endif()
 
 # Tests.
 if(EINHEIT_BUILD_TESTS)

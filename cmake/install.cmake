@@ -16,10 +16,14 @@ include(GNUInstallDirs)
 option(EINHEIT_INSTALL_DEVEL
   "Install development artifacts (headers + static archives)" ON)
 
-install(TARGETS einheit
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-  COMPONENT runtime
-)
+# The appliance binary only exists when the bundled adapters build
+# (see the EINHEIT_BUILD_ADAPTERS gate in the top-level lists file).
+if(TARGET einheit)
+  install(TARGETS einheit
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT runtime
+  )
+endif()
 
 if(EINHEIT_INSTALL_DEVEL)
   install(TARGETS einheit_cli cli_core_obj cli_protocol cli_transport cli_render

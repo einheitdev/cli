@@ -19,25 +19,30 @@ include(FetchContent)
 
 set(third_party_install_root "third_party")
 
-# ----- libzmq (system package) ----------------------------------------------
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(libzmq REQUIRED IMPORTED_TARGET libzmq)
+# ZMQ + CurveZMQ crypto are host-package dependencies an embedded
+# in-proc consumer (s5, s100) neither needs nor can cross-compile
+# against; EINHEIT_NO_ZMQ drops them and every source that uses them.
+if(NOT EINHEIT_NO_ZMQ)
+  # ----- libzmq (system package) --------------------------------------------
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(libzmq REQUIRED IMPORTED_TARGET libzmq)
 
-# ----- libsodium (system package; CurveZMQ crypto backend) ------------------
-pkg_check_modules(libsodium REQUIRED IMPORTED_TARGET libsodium)
+  # ----- libsodium (system package; CurveZMQ crypto backend) ----------------
+  pkg_check_modules(libsodium REQUIRED IMPORTED_TARGET libsodium)
 
-# ----- cppzmq (header-only) -------------------------------------------------
-if(NOT TARGET cppzmq)
-  find_package(cppzmq QUIET)
-endif()
-if(NOT TARGET cppzmq)
-  FetchContent_Declare(cppzmq
-    GIT_REPOSITORY https://github.com/zeromq/cppzmq.git
-    GIT_TAG v4.10.0
-    GIT_SHALLOW TRUE
-  )
-  set(CPPZMQ_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  FetchContent_MakeAvailable(cppzmq)
+  # ----- cppzmq (header-only) -----------------------------------------------
+  if(NOT TARGET cppzmq)
+    find_package(cppzmq QUIET)
+  endif()
+  if(NOT TARGET cppzmq)
+    FetchContent_Declare(cppzmq
+      GIT_REPOSITORY https://github.com/zeromq/cppzmq.git
+      GIT_TAG v4.10.0
+      GIT_SHALLOW TRUE
+    )
+    set(CPPZMQ_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(cppzmq)
+  endif()
 endif()
 
 # ----- readline removed — replxx (fetched below) is the line editor -------
@@ -90,8 +95,16 @@ endif()
 # ----- spdlog ---------------------------------------------------------------
 # Skip if a parent project already provides spdlog.
 if(NOT TARGET spdlog AND NOT TARGET spdlog::spdlog)
-  set(SPDLOG_BUILD_SHARED ON CACHE BOOL "" FORCE)
-  set(SPDLOG_BUILD_STATIC OFF CACHE BOOL "" FORCE)
+  # Cross-compiled product binaries link -static (s5, s100), so
+  # spdlog must be an archive there; the appliance build stays
+  # shared so the OS can patch it.
+  if(CMAKE_CROSSCOMPILING)
+    set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(SPDLOG_BUILD_STATIC ON CACHE BOOL "" FORCE)
+  else()
+    set(SPDLOG_BUILD_SHARED ON CACHE BOOL "" FORCE)
+    set(SPDLOG_BUILD_STATIC OFF CACHE BOOL "" FORCE)
+  endif()
   set(SPDLOG_NO_EXCEPTIONS OFF CACHE BOOL "" FORCE)
 
   FetchContent_Declare(spdlog

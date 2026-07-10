@@ -2,7 +2,7 @@
 # aliases. The headline framework target adapters and binaries link
 # against.
 
-add_library(cli_core_obj OBJECT
+set(_cli_core_sources
   src/schema.cc
   src/command_tree.cc
   src/globals.cc
@@ -11,14 +11,12 @@ add_library(cli_core_obj OBJECT
   src/confd/runtime.cc
   src/confd/memory_backend.cc
   src/confd/store.cc
-  src/confd/zmq_server.cc
   src/shell.cc
   src/watch.cc
   src/shell_escape.cc
   src/auth.cc
   src/audit.cc
   src/adapter_contract.cc
-  src/curve_keys.cc
   src/fuzzy.cc
   src/net_parse.cc
   src/target_config.cc
@@ -26,10 +24,22 @@ add_library(cli_core_obj OBJECT
   src/history.cc
   src/aliases.cc
   src/line_reader.cc
-  src/learning_daemon.cc
   src/locked_sandbox.cc
   src/signals.cc
   src/supervisor.cc
+)
+# The confd ZMQ server, CurveZMQ keys, and the learning daemon sit
+# on libzmq/libsodium — dropped for EINHEIT_NO_ZMQ consumers.
+if(NOT EINHEIT_NO_ZMQ)
+  list(APPEND _cli_core_sources
+    src/confd/zmq_server.cc
+    src/curve_keys.cc
+    src/learning_daemon.cc
+  )
+endif()
+
+add_library(cli_core_obj OBJECT
+  ${_cli_core_sources}
 )
 
 target_include_directories(cli_core_obj
