@@ -130,10 +130,15 @@ class ReplxxReader : public LineReader {
           MenuStep(-1);
           return replxx::Replxx::ACTION_RESULT::CONTINUE;
         }));
-    // Enter with a menu on screen: wipe the grid first so command
-    // output doesn't land on top of stale candidates.
+    // Enter while a candidate is highlighted ACCEPTS it (zsh menu
+    // select) — the line is not executed; editing continues after
+    // the completed token. A plain Enter commits, wiping any grid
+    // first so command output doesn't land on stale candidates.
     rx_.bind_key(replxx::Replxx::KEY::ENTER, NoThrow(
         [this](char32_t code) -> replxx::Replxx::ACTION_RESULT {
+          if (AcceptMenuSelection()) {
+            return replxx::Replxx::ACTION_RESULT::CONTINUE;
+          }
           ClearMenu();
           return rx_.invoke(
               replxx::Replxx::ACTION::COMMIT_LINE, code);
@@ -350,6 +355,42 @@ class ReplxxReader : public LineReader {
     block += std::format("\x1b[{}A", rows);
     menu_rows_ = rows;
     rx_.print("%s", block.c_str());
+  }
+
+  /// Accept the currently highlighted menu candidate: keep it in
+  /// the line, close the menu, and (for leaves) append the
+  /// trailing space so typing/TAB continues with the next token.
+  /// @returns true when a selection was accepted — the caller
+  ///   must NOT commit the line.
+  auto AcceptMenuSelection() -> bool {
+    if (!menu_active_ || menu_index_ < 0) return false;
+    const std::string text(rx_.get_state().text());
+    const auto cursor = static_cast<std::size_t>(
+        rx_.get_state().cursor_position());
+    if (text != menu_expected_text_ ||
+        cursor != menu_expected_cursor_) {
+      // The line changed since the menu went up — stale menu,
+      // normal Enter semantics apply.
+      menu_active_ = false;
+      return false;
+    }
+    std::string token = menu_items_[menu_index_];
+    const bool mid_path = !token.empty() && token.back() == '.';
+    const bool space_follows =
+        cursor < text.size() && text[cursor] == ' ';
+    if (!mid_path && !space_follows) {
+      token += ' ';
+      // set_state dirties the editor, so replxx's post-key
+      // refresh runs and its erase-below wipes the grid for us.
+      ReplaceToken(menu_expected_text_, menu_token_start_,
+                   menu_expected_cursor_, token);
+      menu_rows_ = 0;
+      menu_active_ = false;
+    } else {
+      // Nothing to rewrite — wipe the grid ourselves.
+      ClearMenu();
+    }
+    return true;
   }
 
   /// Wipe a visible menu grid from below the input line (used
