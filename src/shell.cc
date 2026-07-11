@@ -12,6 +12,7 @@
 
 #include <csignal>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #include <chrono>
 #include <cstdlib>
@@ -901,6 +902,28 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
         add("width", std::format("{}", s.caps.width));
         add("height", std::format("{}", s.caps.height));
         add("is_tty", s.caps.is_tty ? "yes" : "no");
+        // The raw signals capability detection ran on — the first
+        // things to check when someone reports "no colour" or
+        // "tab does nothing" over SSH.
+        add("stdin_tty",
+            ::isatty(STDIN_FILENO) != 0 ? "yes" : "no",
+            ::isatty(STDIN_FILENO) != 0
+                ? render::Semantic::Good
+                : render::Semantic::Warn);
+        const char *term_env = std::getenv("TERM");
+        add("TERM",
+            term_env == nullptr ? "<unset>" : term_env,
+            term_env == nullptr ? render::Semantic::Warn
+                                 : render::Semantic::Default);
+        const char *colorterm_env = std::getenv("COLORTERM");
+        add("COLORTERM",
+            colorterm_env == nullptr ? "<unset>" : colorterm_env,
+            render::Semantic::Dim);
+        const char *no_color_env = std::getenv("NO_COLOR");
+        add("NO_COLOR",
+            no_color_env == nullptr ? "<unset>" : no_color_env,
+            no_color_env == nullptr ? render::Semantic::Dim
+                                     : render::Semantic::Warn);
         add("target",
             s.target_name.empty() ? "<local>" : s.target_name,
             render::Semantic::Info);

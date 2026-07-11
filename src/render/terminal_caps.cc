@@ -65,7 +65,16 @@ auto DetectTerminal() -> TerminalCaps {
     caps.force_plain = true;
   }
 
-  const std::string term = Getenv("TERM");
+  std::string term = Getenv("TERM");
+  // A real tty with no TERM at all is an env that got lost on the
+  // way (sudo scrub, exotic SSH client), not a glass terminal —
+  // over SSH, ANSI is a safe floor. Export the assumption so the
+  // line editor (which makes its own TERM check) agrees with the
+  // caps; a literal TERM=dumb stays respected.
+  if (caps.is_tty && term.empty()) {
+    term = "xterm";
+    ::setenv("TERM", term.c_str(), 0);
+  }
   const std::string colorterm = Getenv("COLORTERM");
   caps.colors = caps.force_plain
                     ? ColorDepth::None
