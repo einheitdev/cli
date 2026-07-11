@@ -123,7 +123,8 @@ TEST(Schema, CompletionsAtRoot) {
   auto s = LoadSchema(f.Path());
   ASSERT_TRUE(s.has_value());
   auto c = Completions(**s, "i");
-  EXPECT_NE(std::find(c.begin(), c.end(), "interfaces"), c.end());
+  // Containers complete to "name." so path completion descends.
+  EXPECT_NE(std::find(c.begin(), c.end(), "interfaces."), c.end());
 }
 
 TEST(Schema, CompletionsNested) {

@@ -603,7 +603,15 @@ auto Completions(const Schema &schema,
 
   std::vector<std::string> out;
   for (const auto &[name, child] : scope->fields) {
-    if (name.rfind(typing, 0) == 0) out.push_back(name);
+    if (name.rfind(typing, 0) != 0) continue;
+    // Containers complete to "name." so the next completion pass
+    // descends into their children; only leaves are terminal.
+    const bool container =
+        child &&
+        (std::holds_alternative<ObjectSpec>(child->shape) ||
+         std::holds_alternative<MapSpec>(child->shape) ||
+         std::holds_alternative<ListSpec>(child->shape));
+    out.push_back(container ? name + "." : name);
   }
   std::sort(out.begin(), out.end());
   return out;

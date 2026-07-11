@@ -212,9 +212,30 @@ class ReplxxReader : public LineReader {
       }
       auto cands = completion_fn_(preceding, partial);
       if (cands.empty()) return;
+      // Dotted config paths complete segment by segment: the
+      // provider consumes the full dotted partial but returns
+      // candidates for its LAST segment, so only that segment is
+      // replaced. Plain command words have no dot — the segment
+      // is the whole token.
       const auto token_start = before.size() - partial.size();
+      const auto last_dot = partial.find_last_of('.');
+      const auto seg_off =
+          last_dot == std::string::npos ? 0 : last_dot + 1;
+      const std::string segment = partial.substr(seg_off);
+      const auto replace_start = token_start + seg_off;
       if (cands.size() == 1) {
-        ReplaceToken(text, token_start, cursor, cands.front());
+        // A unique match completes outright — WITH a trailing
+        // space, so the next TAB moves on to the next token
+        // instead of re-completing this one (`show<TAB>` must not
+        // need a hand-typed space to continue). A container path
+        // ("dns.") keeps completing in place, and an existing
+        // space after the cursor is not doubled.
+        std::string token = cands.front();
+        const bool mid_path = !token.empty() && token.back() == '.';
+        const bool space_follows =
+            cursor < text.size() && text[cursor] == ' ';
+        if (!mid_path && !space_follows) token += ' ';
+        ReplaceToken(text, replace_start, cursor, token);
         menu_active_ = false;
         return;
       }
@@ -228,18 +249,18 @@ class ReplxxReader : public LineReader {
       }
       menu_items_ = std::move(cands);
       menu_index_ = -1;
-      menu_token_start_ = token_start;
+      menu_token_start_ = replace_start;
       menu_rows_ = 0;
       menu_active_ = true;
-      if (lcp.size() > partial.size()) {
+      if (lcp.size() > segment.size()) {
         // The prefix grew — land there first, list the options,
         // and leave selection to the next press (zsh AUTO_MENU).
         menu_base_ = lcp;
-        ReplaceToken(text, token_start, cursor, lcp);
+        ReplaceToken(text, replace_start, cursor, lcp);
         rx_.emulate_key_press(kMenuPaintKey);
         return;
       }
-      menu_base_ = partial;
+      menu_base_ = segment;
       menu_expected_text_ = text;
       menu_expected_cursor_ = cursor;
     }
