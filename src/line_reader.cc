@@ -130,6 +130,24 @@ class ReplxxReader : public LineReader {
           MenuStep(-1);
           return replxx::Replxx::ACTION_RESULT::CONTINUE;
         }));
+    // Enter with a menu on screen: wipe the grid first so command
+    // output doesn't land on top of stale candidates.
+    rx_.bind_key(replxx::Replxx::KEY::ENTER, NoThrow(
+        [this](char32_t code) -> replxx::Replxx::ACTION_RESULT {
+          ClearMenu();
+          return rx_.invoke(
+              replxx::Replxx::ACTION::COMMIT_LINE, code);
+        }));
+    // The grid must be painted AFTER replxx's own post-key refresh
+    // (whose erase-below would wipe it). MenuStep schedules this
+    // synthetic key; its handler runs on the next loop iteration,
+    // once the line has been redrawn, and paints without dirtying
+    // the state so no further refresh follows.
+    rx_.bind_key(kMenuPaintKey, NoThrow(
+        [this](char32_t) -> replxx::Replxx::ACTION_RESULT {
+          if (menu_active_) RenderMenu();
+          return replxx::Replxx::ACTION_RESULT::CONTINUE;
+        }));
   }
 
   auto ReadLine(const std::string &prompt)
@@ -160,6 +178,10 @@ class ReplxxReader : public LineReader {
   }
 
  private:
+  /// Synthetic key used to sequence grid painting after replxx's
+  /// own refresh — a private-use codepoint no terminal emits.
+  static constexpr char32_t kMenuPaintKey = 0x10FFFD;
+
   /// One TAB / Shift-TAB press of the zsh-style completion menu.
   /// First press extends the common prefix and (when ambiguous)
   /// lists the candidates; further presses move the highlight and
@@ -214,7 +236,7 @@ class ReplxxReader : public LineReader {
         // and leave selection to the next press (zsh AUTO_MENU).
         menu_base_ = lcp;
         ReplaceToken(text, token_start, cursor, lcp);
-        RenderMenu();
+        rx_.emulate_key_press(kMenuPaintKey);
         return;
       }
       menu_base_ = partial;
@@ -233,7 +255,7 @@ class ReplxxReader : public LineReader {
                                    : menu_items_[menu_index_];
     ReplaceToken(menu_expected_text_, menu_token_start_,
                  menu_expected_cursor_, token);
-    RenderMenu();
+    rx_.emulate_key_press(kMenuPaintKey);
   }
 
   /// Replace [start, end) of `text` with `token`, park the cursor
@@ -250,10 +272,13 @@ class ReplxxReader : public LineReader {
     menu_expected_cursor_ = start + token.size();
   }
 
-  /// Print the candidate grid above the input line, highlighting
-  /// the selection (reverse video; a `>` gutter when colour is
-  /// off). Re-renders in place while cycling by climbing back over
-  /// the previous grid.
+  /// Print the candidate grid BELOW the input line — zsh-style:
+  /// the prompt stays put — highlighting the selection (reverse
+  /// video; a `>` gutter when colour is off). Draws by dropping
+  /// under the prompt line and climbing back, so replxx repaints
+  /// the prompt exactly where it was; relative moves keep this
+  /// correct even when drawing at the bottom of the screen
+  /// scrolls it.
   auto RenderMenu() -> void {
     int width = 80;
     struct winsize ws {};
@@ -271,12 +296,7 @@ class ReplxxReader : public LineReader {
     const int n = static_cast<int>(menu_items_.size());
     const int rows = (n + per_row - 1) / per_row;
 
-    std::string block = "\r\x1b[K";
-    if (menu_rows_ > 0) {
-      // Overwrite the grid from the previous step instead of
-      // scrolling a fresh copy in.
-      block += std::format("\x1b[{}A", menu_rows_);
-    }
+    std::string block = "\r\n";
     for (int row = 0; row < rows; ++row) {
       block += "\x1b[K";
       for (int col = 0; col < per_row; ++col) {
@@ -291,10 +311,24 @@ class ReplxxReader : public LineReader {
           block += (sel ? ">" : " ") + item + pad;
         }
       }
-      block += "\n";
+      if (row + 1 < rows) block += "\r\n";
     }
+    // Clear anything below (a previous, taller grid), then climb
+    // back to the input line for replxx's in-place repaint.
+    block += "\x1b[0J";
+    block += std::format("\x1b[{}A", rows);
     menu_rows_ = rows;
     rx_.print("%s", block.c_str());
+  }
+
+  /// Wipe a visible menu grid from below the input line (used
+  /// before the line is committed, so command output doesn't land
+  /// on top of stale candidates).
+  auto ClearMenu() -> void {
+    if (menu_rows_ <= 0) return;
+    rx_.print("%s", "\n\x1b[0J\x1b[1A");
+    menu_rows_ = 0;
+    menu_active_ = false;
   }
 
   auto ShowHelpOverlay() -> void {
