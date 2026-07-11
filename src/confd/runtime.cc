@@ -445,6 +445,39 @@ auto HandleRollback(Runtime::Impl &d, const protocol::Request &req,
                        "usage: rollback candidate | previous | <commit-id>");
 }
 
+auto HandleShowDiff(Runtime::Impl &d, const protocol::Request &req)
+    -> protocol::Response {
+  protocol::Response r;
+  r.id = req.id;
+  if (!d.active) {
+    r.data = EncodeString(
+        "status=no configure session — nothing to compare\n");
+    return r;
+  }
+  // Candidate vs running, changes only — the Junos `show | compare`
+  // view of what commit would do. Same +/~/- markers the adapters
+  // already colour for show_commit.
+  std::string body;
+  for (const auto &[k, v] : d.active->candidate.values) {
+    auto it = d.running.find(k);
+    if (it == d.running.end()) {
+      body += std::format("+{}={}\n", k, v);
+    } else if (it->second != v) {
+      body += std::format("~{}={} (was {})\n", k, v, it->second);
+    }
+  }
+  for (const auto &[k, v] : d.running) {
+    if (!d.active->candidate.values.contains(k)) {
+      body += std::format("-{}={}\n", k, v);
+    }
+  }
+  if (body.empty()) {
+    body = "status=candidate matches running — nothing to commit\n";
+  }
+  r.data = EncodeString(body);
+  return r;
+}
+
 auto HandleShowConfig(Runtime::Impl &d, const protocol::Request &req)
     -> protocol::Response {
   protocol::Response r;
@@ -640,6 +673,7 @@ auto Runtime::HandleRequest(const protocol::Request &req)
                           req.args.empty() ? std::string() : req.args[0]);
   }
   if (req.command == "show_config") return HandleShowConfig(d, req);
+  if (req.command == "show_diff") return HandleShowDiff(d, req);
   if (req.command == "show_commits") return HandleShowCommits(d, req);
   if (req.command == "show_commit") return HandleShowCommit(d, req);
   if (req.command == "show_status") return HandleShowStatus(d, req);

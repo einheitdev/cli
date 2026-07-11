@@ -106,6 +106,9 @@ auto RegisterConfigGlobals(CommandTree &tree)
                    "Show running configuration (optional prefix)"),
               "prefix", "Filter to paths under this prefix",
               /*required=*/false),
+      Make("show diff", "show_diff",
+           "Show uncommitted candidate changes vs running "
+           "(Junos: show | compare)"),
       Make("show commits", "show_commits", "List commit history"),
       WithArg(Make("show commit", "show_commit",
                    "Show a single commit by id"),
