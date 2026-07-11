@@ -579,6 +579,19 @@ Runtime::Runtime(ConfigBackend &backend, RuntimeOptions opts)
   }
   if (!loaded_state) {
     impl_->running = backend.ReadRunning();
+  } else {
+    // Reconcile intent with reality — the documented purpose of
+    // ReadRunning. The box may have changed while confd was down,
+    // and the config surface may have grown paths the stored
+    // running predates; unreconciled, those paths are invisible to
+    // candidate seeding, so commits freeze incomplete candidates
+    // and a later rollback silently fails to restore them. Reality
+    // wins per key ("running" means the box; intent lives in
+    // history); stored-only keys survive, covering write-only
+    // config the box cannot report back.
+    for (auto &[path, value] : backend.ReadRunning()) {
+      impl_->running[path] = value;
+    }
   }
 
   // Recovery: a commit-confirm window whose deadline elapsed while
