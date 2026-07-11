@@ -3,6 +3,7 @@
 add_library(cli_render_obj OBJECT
   src/render/terminal_caps.cc
   src/render/table.cc
+  src/render/config_tree.cc
   src/render/sparkline.cc
   src/render/banner.cc
   src/render/confirm.cc
