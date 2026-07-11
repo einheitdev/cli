@@ -474,6 +474,19 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
       render::PickTheme(s.caps, render::DetectLightTerminal()));
   std::cout << render::Banner(binfo, s.caps, theme);
 
+  // The single most-reported "broken CLI" is no CLI bug at all:
+  // `ssh host einheit` without -t gives the session no terminal,
+  // so colour, completion and line editing are rightly off (script
+  // mode) and Ctrl-C belongs to the local ssh. Say so once instead
+  // of letting the operator diagnose it from symptoms. On stderr:
+  // scripted/piped stdout stays clean.
+  if (::isatty(STDIN_FILENO) == 0 || ::isatty(STDOUT_FILENO) == 0) {
+    std::cerr << "  note: no terminal on this session — colour, "
+                 "tab completion and line\n"
+                 "  editing are off. For interactive use "
+                 "reconnect with `ssh -t ...`.\n\n";
+  }
+
   // Mini tutorial in learning mode — gives first-time users a
   // concrete path to try. Uses theme colours so it matches the
   // rest of the shell chrome.
