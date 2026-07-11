@@ -21,6 +21,15 @@ auto MakeError(CommandTreeError code, std::string message)
   return Error<CommandTreeError>{code, std::move(message)};
 }
 
+auto RoleLabel(RoleGate role) -> const char * {
+  switch (role) {
+    case RoleGate::AdminOnly:         return "admin";
+    case RoleGate::OperatorOrAdmin:   return "operator";
+    case RoleGate::AnyAuthenticated:
+    default:                          return "any";
+  }
+}
+
 }  // namespace
 
 auto RoleAllows(RoleGate caller, RoleGate required) -> bool {
@@ -136,7 +145,11 @@ auto Parse(const CommandTree &tree,
   }
   if (!RoleAllows(caller_role, best->role)) {
     return std::unexpected(MakeError(
-        CommandTreeError::NotAuthorised, "role does not allow"));
+        CommandTreeError::NotAuthorised,
+        std::format("requires {} role — you are {} (start the CLI "
+                    "via the launcher / sudo for admin)",
+                    RoleLabel(best->role),
+                    RoleLabel(caller_role))));
   }
 
   ParsedCommand out;
@@ -152,17 +165,6 @@ auto Parse(const CommandTree &tree,
   }
   return out;
 }
-
-namespace {
-auto RoleLabel(RoleGate role) -> const char * {
-  switch (role) {
-    case RoleGate::AdminOnly:         return "admin";
-    case RoleGate::OperatorOrAdmin:   return "operator";
-    case RoleGate::AnyAuthenticated:
-    default:                          return "any";
-  }
-}
-}  // namespace
 
 auto FormatHelpIndex(const CommandTree &tree) -> std::string {
   std::vector<const CommandSpec *> sorted;

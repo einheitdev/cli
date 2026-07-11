@@ -592,9 +592,15 @@ auto Completions(const Schema &schema,
     } else if (auto *lst = std::get_if<ListSpec>(&n->shape)) {
       if (!lst->item) return {};
       scope = std::get_if<ObjectSpec>(&lst->item->shape);
-    } else if (auto *m = std::get_if<MapSpec>(&n->shape)) {
-      if (!m->value) return {};
-      scope = std::get_if<ObjectSpec>(&m->value->shape);
+    } else if (std::get_if<MapSpec>(&n->shape) != nullptr) {
+      // The next segment is a map KEY (an interface name, a port
+      // number) the schema cannot enumerate. Offering the value
+      // object's fields here used to complete invalid paths like
+      // "interfaces.dhcp" with the key level silently skipped —
+      // stay silent and let the operator type the key. (Resolve
+      // consumes a concrete key, so "interfaces.eth0." completes
+      // fields normally.)
+      return {};
     } else {
       return {};
     }
