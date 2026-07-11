@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <iostream>
 #include <optional>
@@ -54,7 +55,12 @@ class StdinReader : public LineReader {
 //  * bind_key('?')           — inline help popup
 class ReplxxReader : public LineReader {
  public:
-  ReplxxReader() {
+  explicit ReplxxReader(bool no_color) {
+    // replxx colours its completion menu and hints on its own,
+    // bypassing the renderer's capability gate. When the caps say
+    // plain (NO_COLOR, dumb pipe, ColorDepth::None), replxx must
+    // go plain too or "no colour" terminals get raw SGR garbage.
+    rx_.set_no_color(no_color);
     rx_.set_word_break_characters(" \t");
     // Every callback handed to replxx is wrapped in NoThrow at the
     // registration site (gap #7). An exception must NEVER cross back
@@ -109,8 +115,16 @@ class ReplxxReader : public LineReader {
 
   auto ReadLine(const std::string &prompt)
       -> std::optional<std::string> override {
+    errno = 0;
     const char *line = rx_.input(prompt.c_str());
-    if (!line) return std::nullopt;
+    if (!line) {
+      // replxx returns nullptr for BOTH end-of-input (Ctrl-D) and
+      // a cancelled line (Ctrl-C, errno == EAGAIN). Only the
+      // former may end the shell — an operator's reflex Ctrl-C
+      // over SSH must clear the line, never log the session out.
+      if (errno == EAGAIN) return std::string();
+      return std::nullopt;
+    }
     return std::string(line);
   }
 
@@ -183,11 +197,11 @@ class ReplxxReader : public LineReader {
 
 }  // namespace
 
-auto NewLineReader() -> std::unique_ptr<LineReader> {
+auto NewLineReader(bool no_color) -> std::unique_ptr<LineReader> {
   if (::isatty(STDIN_FILENO) == 0) {
     return std::make_unique<StdinReader>();
   }
-  return std::make_unique<ReplxxReader>();
+  return std::make_unique<ReplxxReader>(no_color);
 }
 
 }  // namespace einheit::cli

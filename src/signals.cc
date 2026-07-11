@@ -237,8 +237,13 @@ struct ControlListener::Impl {
       const ssize_t n = ::read(sfd, &si, sizeof(si));
       if (n != static_cast<ssize_t>(sizeof(si))) continue;
       switch (si.ssi_signo) {
-        case SIGTERM:
         case SIGINT:
+          if (handlers.on_interrupt) {
+            handlers.on_interrupt();
+            break;
+          }
+          [[fallthrough]];
+        case SIGTERM:
         case SIGQUIT:
         case SIGHUP:
           if (handlers.on_shutdown) handlers.on_shutdown();

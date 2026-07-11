@@ -73,11 +73,20 @@ auto IgnoreSigpipe() -> void;
 /// locks, and log. Any callback may be empty (the signal is then
 /// drained and ignored).
 struct ControlHandlers {
-  /// TERM / INT / QUIT / HUP — begin a graceful shutdown: stop taking
+  /// TERM / QUIT / HUP — begin a graceful shutdown: stop taking
   /// input, flush, release resources, exit cleanly. For the CLI, HUP
   /// means the SSH session dropped; the CLI exits, and (by design) the
   /// rollback timer lives in the daemon, not here, so it survives.
+  /// INT also lands here when `on_interrupt` is unset.
   std::function<void()> on_shutdown;
+  /// INT — the interactive interrupt. The tty delivers Ctrl-C's
+  /// SIGINT to the whole foreground process group, so a process
+  /// supervising an interactive shell must not treat it as its own
+  /// shutdown order — the shell sees the same signal directly. When
+  /// set, INT routes here (an empty function simply drains it);
+  /// when unset, INT keeps its historical shutdown meaning (right
+  /// for daemons).
+  std::function<void()> on_interrupt;
   /// USR1 — reopen log files (logrotate).
   std::function<void()> on_reopen_logs;
   /// USR2 — dump runtime status / stats to the log without stopping.

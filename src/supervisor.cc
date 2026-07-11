@@ -84,6 +84,11 @@ auto RunSupervised(const std::function<int()> &child_main,
   handlers.on_shutdown = [pid] {
     ::kill(pid, SIGTERM);
   };
+  // Ctrl-C reaches the child directly through the foreground
+  // process group; the supervisor only drains it. Forwarding it as
+  // SIGTERM (the old behaviour) turned every interactive interrupt
+  // into a session logout.
+  handlers.on_interrupt = [] {};
   signals::ControlListener listener(std::move(handlers));
 
   int status = 0;

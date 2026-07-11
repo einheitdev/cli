@@ -69,8 +69,12 @@ class LineReader {
 /// Construct the best available line reader. Prefers readline when
 /// compiled in; otherwise returns a fallback that uses `std::cin`
 /// with no line editing.
+/// @param no_color Suppress the reader's own colouring (completion
+///   menus, hints) — pass the renderer's plain-mode verdict so
+///   NO_COLOR / ColorDepth::None terminals never receive raw SGR.
 /// @returns Owned LineReader.
-auto NewLineReader() -> std::unique_ptr<LineReader>;
+auto NewLineReader(bool no_color = false)
+    -> std::unique_ptr<LineReader>;
 
 }  // namespace einheit::cli
 

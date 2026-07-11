@@ -10,6 +10,7 @@
 
 #include "einheit/cli/shell.h"
 
+#include <csignal>
 #include <sys/wait.h>
 
 #include <chrono>
@@ -406,11 +407,36 @@ auto HandshakeCatalog(Shell &s) -> int {
 
 }  // namespace
 
+// Interactive-shell SIGINT semantics (bash-like), scoped RAII:
+// Ctrl-C during a running command must interrupt the command's
+// children, never the shell itself. A no-op HANDLER (not SIG_IGN)
+// is deliberate: handlers reset to default across exec, so spawned
+// children (ping, pager, shell escape) stay interruptible while
+// this process survives. Restored on destruction for oneshot /
+// embedding callers.
+class ScopedSigintShield {
+ public:
+  ScopedSigintShield() {
+    struct sigaction act {};
+    act.sa_handler = [](int) {};
+    act.sa_flags = SA_RESTART;
+    ::sigaction(SIGINT, &act, &prev_);
+  }
+  ~ScopedSigintShield() { ::sigaction(SIGINT, &prev_, nullptr); }
+  ScopedSigintShield(const ScopedSigintShield &) = delete;
+  auto operator=(const ScopedSigintShield &)
+      -> ScopedSigintShield & = delete;
+
+ private:
+  struct sigaction prev_ {};
+};
+
 auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
   if (!s.tx || !s.adapter) {
     return std::unexpected(MakeError(
         ShellError::TransportUnavailable, "shell not initialised"));
   }
+  ScopedSigintShield sigint_shield;
   if (s.caller.user.empty()) {
     auto caller = auth::ResolveLocal();
     if (!caller) {
@@ -544,7 +570,11 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
     }
   }
 
-  auto reader = NewLineReader();
+  // replxx colours its menus itself, so it needs the caps verdict.
+  const bool reader_no_color =
+      s.caps.force_plain ||
+      s.caps.colors == render::ColorDepth::None;
+  auto reader = NewLineReader(reader_no_color);
   reader->SetCompletion(
       [&](const std::vector<std::string> &preceding,
           const std::string &partial) -> std::vector<std::string> {
