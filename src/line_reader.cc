@@ -111,6 +111,26 @@ class ReplxxReader : public LineReader {
           ShowHelpOverlay();
           return replxx::Replxx::ACTION_RESULT::CONTINUE;
         }));
+    // Tab cycles: replxx's stock TAB only extends the common prefix
+    // and lists candidates; the cycling machinery (COMPLETE_NEXT /
+    // COMPLETE_PREVIOUS) sits unbound on Ctrl-N/Ctrl-P where no
+    // operator finds it. Bind TAB to the cycler — with immediate
+    // completion off, the first TAB still extends the prefix and
+    // each further TAB steps through the candidates (Shift-TAB
+    // steps back, one past the end restores the typed prefix).
+    rx_.set_immediate_completion(false);
+    rx_.bind_key(replxx::Replxx::KEY::TAB, NoThrow(
+        [this](char32_t code) -> replxx::Replxx::ACTION_RESULT {
+          return rx_.invoke(
+              replxx::Replxx::ACTION::COMPLETE_NEXT, code);
+        }));
+    rx_.bind_key(
+        replxx::Replxx::KEY::shift(replxx::Replxx::KEY::TAB),
+        NoThrow([this](char32_t code)
+                    -> replxx::Replxx::ACTION_RESULT {
+          return rx_.invoke(
+              replxx::Replxx::ACTION::COMPLETE_PREVIOUS, code);
+        }));
   }
 
   auto ReadLine(const std::string &prompt)
