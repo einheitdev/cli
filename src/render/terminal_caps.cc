@@ -39,12 +39,19 @@ auto DetectColors(const std::string &term,
 
 auto DetectUnicode() -> bool {
   const char *locale = std::setlocale(LC_CTYPE, "");
-  if (!locale) return false;
-  std::string s(locale);
-  if (s == "C" || s == "POSIX") return false;
-  for (auto &c : s) c = static_cast<char>(std::tolower(c));
-  return s.find("utf-8") != std::string::npos ||
-         s.find("utf8") != std::string::npos;
+  if (locale) {
+    std::string s(locale);
+    if (s != "C" && s != "POSIX") {
+      for (auto &c : s) c = static_cast<char>(std::tolower(c));
+      return s.find("utf-8") != std::string::npos ||
+             s.find("utf8") != std::string::npos;
+    }
+  }
+  // Appliance images often ship no generated locales, so the env
+  // locale resolves to plain "C" and the whole CLI degrades to
+  // ASCII borders. glibc's built-in C.UTF-8 needs no locale-gen —
+  // prefer it over ASCII when the env gives us nothing better.
+  return std::setlocale(LC_CTYPE, "C.UTF-8") != nullptr;
 }
 
 }  // namespace
