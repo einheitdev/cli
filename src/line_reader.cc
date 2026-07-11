@@ -307,9 +307,19 @@ class ReplxxReader : public LineReader {
         ws.ws_col > 0) {
       width = ws.ws_col;
     }
+    // Container path candidates carry a functional trailing dot
+    // ("dns." descends on the next pass); the grid shows the bare
+    // name.
+    const auto display = [](const std::string &item)
+        -> std::string {
+      if (!item.empty() && item.back() == '.') {
+        return item.substr(0, item.size() - 1);
+      }
+      return item;
+    };
     std::size_t cell = 1;
     for (const auto &it : menu_items_) {
-      cell = std::max(cell, it.size());
+      cell = std::max(cell, display(it).size());
     }
     // One-char selection gutter + two-space separator per cell.
     const int per_row = std::max(
@@ -324,7 +334,7 @@ class ReplxxReader : public LineReader {
         const int i = row * per_row + col;
         if (i >= n) break;
         const bool sel = i == menu_index_;
-        const auto &item = menu_items_[i];
+        const std::string item = display(menu_items_[i]);
         const std::string pad(cell - item.size() + 2, ' ');
         if (sel && !no_color_) {
           block += " \x1b[7m" + item + "\x1b[27m" + pad;
