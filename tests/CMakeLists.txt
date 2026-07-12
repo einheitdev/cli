@@ -49,6 +49,7 @@ einheit_add_test(test_learning_daemon)
 einheit_add_test(test_theme)
 einheit_add_test(test_config_tree)
 einheit_add_test(test_exerciser)
+einheit_add_test(test_lifecycle_fuzz)
 
 # --locked mode coverage — links the example adapter so the
 # dispatch tests can register globals against a real adapter tree.
