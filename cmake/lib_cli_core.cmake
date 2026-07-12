@@ -11,6 +11,7 @@ set(_cli_core_sources
   src/confd/runtime.cc
   src/confd/memory_backend.cc
   src/confd/store.cc
+  src/confd/exerciser.cc
   src/shell.cc
   src/watch.cc
   src/shell_escape.cc
