@@ -150,12 +150,17 @@ auto RegisterConfigGlobals(CommandTree &tree)
                    "Re-apply a specific committed revision",
                    RoleGate::AdminOnly),
               "id", "Commit id from `show commits`"),
-      Make("set", "set",
-           "Set a candidate-config value at a schema path",
-           RoleGate::AdminOnly, true),
-      Make("delete", "delete",
-           "Remove a candidate-config value at a schema path",
-           RoleGate::AdminOnly, true),
+      WithArg(WithArg(Make("set", "set",
+                           "Set a candidate-config value at a "
+                           "schema path",
+                           RoleGate::AdminOnly, true),
+                      "path", "Dotted schema path"),
+              "value", "New value for the path"),
+      WithArg(Make("delete", "delete",
+                   "Remove a candidate-config value at a schema "
+                   "path",
+                   RoleGate::AdminOnly, true),
+              "path", "Dotted schema path"),
       // Service control wire verbs (`daemon restart`,
       // `daemon stop`) are no longer declared here — the
       // daemon advertises them through its `describe`

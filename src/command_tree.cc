@@ -163,6 +163,22 @@ auto Parse(const CommandTree &tree,
           CommandTreeError::MissingArgument, best->args[i].name));
     }
   }
+  // Wire commands declare their full arity; surplus tokens are
+  // operator error, not payload — `commit 5` must not silently
+  // commit while dropping the 5 (the operator likely meant
+  // `commit confirmed 5` or `rollback to 5`). Framework-local
+  // verbs (help, watch, macro …) keep loose parsing: their extras
+  // are free-form input the shell interprets itself.
+  if (!best->wire_command.empty() &&
+      out.args.size() > best->args.size()) {
+    return std::unexpected(MakeError(
+        CommandTreeError::UnknownCommand,
+        std::format("unexpected argument '{}' — `{}` takes {} "
+                    "argument{}",
+                    out.args[best->args.size()], best->path,
+                    best->args.size(),
+                    best->args.size() == 1 ? "" : "s")));
+  }
   return out;
 }
 
