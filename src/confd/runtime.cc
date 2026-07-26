@@ -489,6 +489,9 @@ auto HandleCommit(Runtime::Impl &d, const protocol::Request &req)
                          "nothing to commit — run `configure`");
   }
   if (!StillHoldsLock(d)) return LockLostResponse(d, req, "commit");
+  // Collected BEFORE the apply, because after it the candidate is the
+  // running configuration and there is nothing left to compare.
+  const auto warnings = d.backend.Warnings(d.active->candidate);
   auto applied = ApplyAndRecord(d, req, d.active->candidate, d.active->author);
   if (!applied) {
     // Keep the session so the operator can fix and retry; running
@@ -510,7 +513,11 @@ auto HandleCommit(Runtime::Impl &d, const protocol::Request &req)
   d.Emit(req, "commit", true, superseded ? "ok (confirmed pending)" : "ok");
   protocol::Response r;
   r.id = req.id;
-  r.data = EncodeString(std::format("commit_id={}", *applied));
+  std::string body = std::format("commit_id={}", *applied);
+  for (const auto &w : warnings) {
+    body += std::format("\n!warning={}", w);
+  }
+  r.data = EncodeString(body);
   return r;
 }
 
@@ -662,6 +669,12 @@ auto HandleShowDiff(Runtime::Impl &d, const protocol::Request &req)
   }
   if (body.empty()) {
     body = "status=candidate matches running — nothing to commit\n";
+  }
+  // Warnings ride along with the diff, not only with the commit: an
+  // operator who runs `show diff` first is exactly the operator we
+  // want to reach BEFORE they type commit.
+  for (const auto &w : d.backend.Warnings(d.active->candidate)) {
+    body += std::format("!warning={}\n", w);
   }
   r.data = EncodeString(body);
   return r;

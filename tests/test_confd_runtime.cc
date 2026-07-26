@@ -238,5 +238,51 @@ TEST(ConfdRuntime, EmitsAuthoritativeAudit) {
   EXPECT_EQ(log.back().user, "root");
 }
 
+/// A backend that objects to one particular path without refusing it.
+class WarningBackend : public MemoryBackend {
+ public:
+  using MemoryBackend::MemoryBackend;
+
+  auto Warnings(const Candidate &candidate) const
+      -> std::vector<std::string> override {
+    if (candidate.values.contains("mgmt.address")) {
+      return {"this changes the address you are connected on"};
+    }
+    return {};
+  }
+};
+
+TEST(ConfdRuntime, BackendWarningsReachTheOperatorBeforeTheyCommit) {
+  WarningBackend backend(EmptySchema());
+  Runtime rt(backend);
+  const auto sid = Configure(rt);
+  rt.HandleRequest(Req("set", {"mgmt.address", "10.0.0.9/24"}, sid));
+
+  // `show diff` is where a careful operator looks first, so the
+  // warning has to be there and not only on the commit response.
+  const auto diff = rt.HandleRequest(Req("show_diff", {}, sid));
+  EXPECT_NE(DataString(diff).find(
+                "!warning=this changes the address you are connected on"),
+            std::string::npos)
+      << DataString(diff);
+
+  const auto commit = rt.HandleRequest(Req("commit", {}, sid));
+  EXPECT_EQ(commit.status, protocol::ResponseStatus::Ok);
+  // A warning is not a refusal: the commit still happened.
+  EXPECT_NE(DataString(commit).find("commit_id="), std::string::npos);
+  EXPECT_NE(DataString(commit).find("!warning="), std::string::npos)
+      << DataString(commit);
+}
+
+TEST(ConfdRuntime, ABackendWithNothingToSayAddsNoWarningLines) {
+  WarningBackend backend(EmptySchema());
+  Runtime rt(backend);
+  const auto sid = Configure(rt);
+  rt.HandleRequest(Req("set", {"hostname", "sw"}, sid));
+  const auto commit = rt.HandleRequest(Req("commit", {}, sid));
+  EXPECT_EQ(DataString(commit).find("!warning="), std::string::npos)
+      << DataString(commit);
+}
+
 }  // namespace
 }  // namespace einheit::cli::confd
