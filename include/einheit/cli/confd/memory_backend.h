@@ -49,6 +49,11 @@ class MemoryBackend : public ConfigBackend {
   /// device state. One-shot: cleared after it fires.
   auto FailNextApply() -> void;
 
+  /// Blank the device without touching the revision counter — a box
+  /// that just powered on. This is how boot-restore tests express "the
+  /// hardware forgot everything, the durable store did not".
+  auto ResetDevice() -> void;
+
  private:
   // Non-null by construction — a MemoryBackend built with a null
   // schema falls back to the empty DefaultSchema(), never a null deref.

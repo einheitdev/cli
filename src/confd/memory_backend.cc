@@ -51,4 +51,9 @@ auto MemoryBackend::FailNextApply() -> void {
   fail_next_ = true;
 }
 
+auto MemoryBackend::ResetDevice() -> void {
+  std::lock_guard<std::mutex> lk(mu_);
+  device_.clear();
+}
+
 }  // namespace einheit::cli::confd

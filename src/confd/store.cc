@@ -14,6 +14,8 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+
+#include "einheit/cli/confd/durable_write.h"
 #include <optional>
 #include <sstream>
 #include <string>
@@ -148,51 +150,32 @@ auto LoadState(const std::string &dir)
 
 auto SaveState(const std::string &dir, const PersistentState &state)
     -> std::expected<void, Error<StoreError>> {
-  std::error_code ec;
-  fs::create_directories(dir, ec);
-  if (ec) {
-    return std::unexpected(
-        MakeError(StoreError::WriteFailed,
-                  std::format("cannot create state dir: {}", ec.message())));
+  std::string body;
+  body += std::format("NEXT_REV {}\n", state.next_rev);
+  body += std::format("PENDING {} {} {} {}\n", state.pending.armed ? 1 : 0,
+                      state.pending.rollback_to,
+                      state.pending.deadline_epoch_ms,
+                      state.pending.pending_commit);
+  for (const auto &[k, v] : state.running) {
+    body += std::format("RUN {} {}\n", k, v);
   }
-
-  const auto final_path = StateFile(dir);
-  const auto tmp_path =
-      fs::path(dir) /
-      std::format("confd.state.tmp.{}", static_cast<int>(::getpid()));
-  {
-    std::ofstream f(tmp_path, std::ios::trunc);
-    if (!f.is_open()) {
-      return std::unexpected(
-          MakeError(StoreError::WriteFailed, "cannot open temp state file"));
-    }
-    f << std::format("NEXT_REV {}\n", state.next_rev);
-    f << std::format("PENDING {} {} {} {}\n", state.pending.armed ? 1 : 0,
-                     state.pending.rollback_to, state.pending.deadline_epoch_ms,
-                     state.pending.pending_commit);
-    for (const auto &[k, v] : state.running) {
-      f << std::format("RUN {} {}\n", k, v);
-    }
-    for (const auto &c : state.history) {
-      f << std::format("COMMIT {} {} {} {}\n", c.id, c.backend_id,
-                       c.author.empty() ? "-" : c.author,
-                       c.timestamp.empty() ? "-" : c.timestamp);
-      for (const auto &[k, v] : c.candidate.values) {
-        f << std::format("CVAL {} {} {}\n", c.id, k, v);
-      }
-    }
-    f.flush();
-    if (!f) {
-      return std::unexpected(
-          MakeError(StoreError::WriteFailed, "write to temp state failed"));
+  for (const auto &c : state.history) {
+    body += std::format("COMMIT {} {} {} {}\n", c.id, c.backend_id,
+                        c.author.empty() ? "-" : c.author,
+                        c.timestamp.empty() ? "-" : c.timestamp);
+    for (const auto &[k, v] : c.candidate.values) {
+      body += std::format("CVAL {} {} {}\n", c.id, k, v);
     }
   }
 
-  fs::rename(tmp_path, final_path, ec);
-  if (ec) {
+  // Durably, not merely atomically. Atomic rename alone leaves the data
+  // and the rename in the page cache, so a power cut seconds after a
+  // commit boots the box on the PREVIOUS revision — the commit the
+  // operator watched succeed is simply gone. `rollback previous` after
+  // a reboot depends on this file being real, not cached.
+  if (auto w = WriteFileDurably(StateFile(dir).string(), body); !w) {
     return std::unexpected(
-        MakeError(StoreError::WriteFailed,
-                  std::format("atomic rename failed: {}", ec.message())));
+        MakeError(StoreError::WriteFailed, w.error().message));
   }
   return {};
 }

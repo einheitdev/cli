@@ -730,7 +730,13 @@ auto RunShell(Shell &s) -> std::expected<void, Error<ShellError>> {
     }
 
     // Destructive verbs get a yellow confirmation prompt.
+    // TODO(framework): this hardcoded path list should be a
+    // `CommandSpec::confirm` flag — as it stands a product cannot mark
+    // its own verbs destructive, and the equally destructive
+    // `rollback to <id>` is missing here for no better reason than
+    // nobody having added it.
     if (parsed->spec->path == "rollback previous" ||
+        parsed->spec->path == "rollback rescue" ||
         parsed->spec->path == "shell" ||
         parsed->spec->path == "delete" ||
         parsed->spec->path == "daemon restart" ||
