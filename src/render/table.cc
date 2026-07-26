@@ -214,8 +214,13 @@ auto RenderViaFtxui(const Table &t, std::ostream &out,
   auto visible = ChooseVisible(t, caps, budget);
 
   auto element = BuildFtxuiTable(t, caps, theme, visible);
-  auto screen = Screen::Create(Dimension::Fit(element),
-                               Dimension::Fit(element));
+  // extend_beyond_screen: a table's height is its content, not the
+  // terminal's — FTXUI otherwise clamps to the tty size (80x24 when
+  // piped), silently dropping rows past the fold; scripted
+  // `show commits | grep` was losing history.
+  auto screen = Screen::Create(
+      Dimension::Fit(element, /*extend_beyond_screen=*/true),
+      Dimension::Fit(element, /*extend_beyond_screen=*/true));
   Render(screen, element);
   out << screen.ToString() << '\n';
 }
@@ -387,8 +392,9 @@ auto RenderError(const std::string &code, const std::string &message,
   Element framed =
       body | borderRounded |
       (colorful ? color(theme.bad) : nothing);
-  auto screen = Screen::Create(Dimension::Fit(framed),
-                               Dimension::Fit(framed));
+  auto screen = Screen::Create(
+      Dimension::Fit(framed, /*extend_beyond_screen=*/true),
+      Dimension::Fit(framed, /*extend_beyond_screen=*/true));
   Render(screen, framed);
   renderer.Out() << screen.ToString() << '\n';
 }
