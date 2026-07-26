@@ -19,8 +19,10 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "einheit/cli/audit.h"
+#include "einheit/cli/confd/boot_report.h"
 #include "einheit/cli/confd/config_backend.h"
 #include "einheit/cli/confd/edit_lock.h"
 #include "einheit/cli/confd/store.h"
@@ -113,9 +115,20 @@ class Runtime {
   /// not a neutral state, since a switch whose ports were never
   /// enabled forwards nothing. With no factory file either, the call
   /// succeeds having done nothing.
+  ///
+  /// Writes a BootReport beside the store either way, including on
+  /// failure: "the apply failed" is exactly the outcome an operator
+  /// needs to see afterwards.
+  /// @param prior_steps Subsystems the product brought up before this
+  ///   call (an s5 passes its switch-fabric bootstrap), recorded in the
+  ///   report ahead of the config apply so the boot reads in order.
   /// @returns What was applied, or the backend's ApplyError.
-  auto ApplyRunningAtBoot()
+  auto ApplyRunningAtBoot(std::vector<BootStep> prior_steps = {})
       -> std::expected<BootApplyResult, Error<ApplyError>>;
+
+  /// The last persisted boot report, or nullopt when no boot apply has
+  /// ever run against this state directory.
+  auto LastBootReport() const -> std::optional<BootReport>;
 
   /// Current running configuration (post last successful commit).
   /// Exposed for status and tests.

@@ -157,6 +157,14 @@ auto RegisterConfigGlobals(CommandTree &tree)
       // empty args.
       Make("rollback previous", "rollback_previous",
            "Roll back to the previous commit", RoleGate::AdminOnly),
+      // Rescue config (Junos parity). Applies immediately like the
+      // other rollback verbs rather than staging a candidate — it is
+      // the verb an operator reaches for when the box is broken.
+      // `save rescue` writes the slot; "rescue" is a reserved config
+      // name, not a separate save verb.
+      Make("rollback rescue", "rollback_rescue",
+           "Restore the saved rescue configuration and commit it",
+           RoleGate::AdminOnly),
       // Roll back to a specific committed revision by id. Distinct wire
       // verb so the id survives path-token stripping.
       WithArg(Make("rollback to", "rollback_to",
@@ -182,7 +190,8 @@ auto RegisterConfigGlobals(CommandTree &tree)
       WithArg(Make("save", "save",
                    "Save the running configuration to a named file",
                    RoleGate::AdminOnly),
-              "name", "Config name (letters, digits, '.', '-', '_')"),
+              "name",
+              "Config name, or `rescue` for the rescue slot"),
       Make("show configs", "show_configs",
            "List saved configuration files"),
       WithArg(Make("load merge", "load_merge",

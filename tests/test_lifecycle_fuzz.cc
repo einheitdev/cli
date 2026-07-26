@@ -156,6 +156,9 @@ auto RunSeed(std::uint32_t seed) -> void {
   // Commit ids as the runtime assigned them, parallel to
   // model.history.
   std::vector<std::uint64_t> ids;
+  // The saved rescue configuration, and whether one exists yet.
+  Config rescue;
+  bool have_rescue = false;
 
   std::mt19937 rng(seed);
   const auto pick = [&rng](std::size_t n) -> std::size_t {
@@ -268,6 +271,32 @@ auto RunSeed(std::uint32_t seed) -> void {
         model.running = target;
         model.history.push_back(target);
         ids.push_back(parse_commit_id(Body(resp)));
+      }
+    } else if (roll < 88) {
+      // save rescue / rollback rescue. Rescue is lifecycle state: the
+      // restore records a commit and moves running, so the model has
+      // to track it like any other rollback.
+      if (rng() % 2 == 0) {
+        what = "save rescue";
+        const auto resp =
+            rt->HandleRequest(Req("save", {"rescue"}, ""));
+        ASSERT_TRUE(Ok(resp)) << std::format(
+            "op {} {}: seed {} ({})", op, what, seed,
+            resp.error ? resp.error->message : "ok");
+        rescue = model.running;
+        have_rescue = true;
+      } else {
+        what = "rollback rescue";
+        const auto resp =
+            rt->HandleRequest(Req("rollback_rescue", {}, ""));
+        ASSERT_EQ(Ok(resp), have_rescue) << std::format(
+            "op {} {}: seed {} ({})", op, what, seed,
+            resp.error ? resp.error->message : "ok");
+        if (Ok(resp)) {
+          model.running = rescue;
+          model.history.push_back(rescue);
+          ids.push_back(parse_commit_id(Body(resp)));
+        }
       }
     } else if (roll < 95) {
       // Process restart: durable state must survive, the open

@@ -33,6 +33,23 @@ inline constexpr const char *kConfigFileHeader = "# einheit-config v1";
 /// Extension appended to a config name on disk.
 inline constexpr const char *kConfigFileSuffix = ".conf";
 
+/// Reserved config name for the rescue configuration (Junos parity:
+/// `save rescue` / `rollback rescue`).
+///
+/// It is a reserved NAME rather than its own verb on purpose. A literal
+/// `save rescue` command alongside `save <name>` would put a literal
+/// token and an argument slot at the same position in the command tree,
+/// and an operator reaching for the rescue slot in an emergency must
+/// not be at the mercy of which one the parser prefers. One verb, one
+/// code path, and `load replace rescue` falls out for free.
+///
+/// The file lives beside the state rather than in the configs
+/// directory, so a future factory reset that clears saved
+/// configurations cannot take the rescue config with it — surviving a
+/// reset is the entire point of a rescue configuration.
+inline constexpr const char *kRescueConfigName = "rescue";
+
+
 /// Why a config-file operation failed.
 enum class ConfigFileError {
   /// The name is not a single safe filesystem component.

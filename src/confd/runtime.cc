@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "einheit/cli/audit.h"
+#include "einheit/cli/confd/boot_report.h"
 #include "einheit/cli/confd/config_file.h"
 #include "einheit/cli/confd/edit_lock.h"
 #include "einheit/cli/confd/store.h"
@@ -128,6 +129,9 @@ struct Runtime::Impl {
   // (and backend restarts) so ids never collide or repeat.
   CommitId next_rev = 0;
   PendingConfirm pending;
+  // In-memory fallback for a runtime with no state dir; with one,
+  // the persisted report is authoritative.
+  std::optional<BootReport> last_boot_report;
 
   // Auto-revert timer. The thread lives in the daemon process, which
   // outlives any CLI / SSH session — this is what makes commit-confirmed
@@ -178,6 +182,31 @@ auto ConfigDir(const Runtime::Impl &d) -> std::string {
   if (!d.config_dir.empty()) return d.config_dir;
   if (d.state_dir.empty()) return {};
   return (std::filesystem::path(d.state_dir) / "configs").string();
+}
+
+// The rescue configuration lives beside the state, NOT in the configs
+// directory, so a factory reset that clears saved configurations cannot
+// take it too. Empty when the runtime has no state dir.
+auto RescuePath(const Runtime::Impl &d) -> std::string {
+  if (d.state_dir.empty()) return {};
+  return (std::filesystem::path(d.state_dir) /
+          (std::string(kRescueConfigName) + kConfigFileSuffix))
+      .string();
+}
+
+// Resolve a config name to a path, honouring the reserved rescue name.
+auto ResolveConfigPath(const Runtime::Impl &d, const std::string &name)
+    -> std::expected<std::string, Error<ConfigFileError>> {
+  if (name == kRescueConfigName) {
+    auto path = RescuePath(d);
+    if (path.empty()) {
+      return std::unexpected(Error<ConfigFileError>{
+          ConfigFileError::NoConfigDir,
+          "this runtime has no state directory"});
+    }
+    return path;
+  }
+  return ConfigFilePath(ConfigDir(d), name);
 }
 
 // Who holds configure mode. The durable lock is authoritative when the
@@ -675,16 +704,40 @@ auto ValidateConfig(const schema::Schema &s, const Config &config)
   return std::nullopt;
 }
 
+// What the post-apply overlay found.
+struct ReconcileCounts {
+  /// Paths the box reports that the applied configuration did not
+  /// carry. Routine: the box always knows things config does not say.
+  std::size_t added = 0;
+  /// Paths where the box disagreed with the value just written to it.
+  /// This is the out-of-band-change signal — reality either refused
+  /// intent or has already drifted from it.
+  std::size_t conflicts = 0;
+};
+
 // Post-apply reconcile. Intent wins for every path the applied
 // configuration carried — those were just programmed — and the box only
 // fills in the paths it said nothing about. The constructor's merge is
 // the opposite direction, and correct there, because it runs when
 // nobody has re-applied intent yet.
-auto ReconcileAfterApply(Runtime::Impl &d, const Config &intent) -> void {
+auto ReconcileAfterApply(Runtime::Impl &d, const Config &intent)
+    -> ReconcileCounts {
+  ReconcileCounts counts;
   d.running = intent;
   for (const auto &[path, value] : d.backend.ReadRunning()) {
-    d.running.emplace(path, value);
+    const auto it = intent.find(path);
+    if (it == intent.end()) {
+      ++counts.added;
+      d.running.emplace(path, value);
+    } else if (it->second != value) {
+      // Intent still wins in `running` — we just wrote it, and the
+      // operator's committed value is the truth we report. But the
+      // disagreement is recorded, because a box that did not take the
+      // value it was given is exactly what an operator needs told.
+      ++counts.conflicts;
+    }
   }
+  return counts;
 }
 
 // Map a config-file failure onto a wire error code. BadName and a
@@ -720,7 +773,7 @@ auto HandleSave(Runtime::Impl &d, const protocol::Request &req)
     d.Emit(req, "save", false, "bad args");
     return ErrorResponse(req, "bad_args", "usage: save <name>");
   }
-  auto path = ConfigFilePath(ConfigDir(d), req.args[0]);
+  auto path = ResolveConfigPath(d, req.args[0]);
   if (!path) {
     d.Emit(req, "save", false, path.error().message);
     return ConfigFileErrorResponse(req, path.error());
@@ -773,7 +826,7 @@ auto HandleLoad(Runtime::Impl &d, const protocol::Request &req,
       return ErrorResponse(req, "bad_args",
                            std::format("usage: load {} <name>", mode));
     }
-    auto path = ConfigFilePath(ConfigDir(d), req.args[0]);
+    auto path = ResolveConfigPath(d, req.args[0]);
     if (!path) {
       d.Emit(req, label, false, path.error().message);
       return ConfigFileErrorResponse(req, path.error());
@@ -813,6 +866,48 @@ auto HandleLoad(Runtime::Impl &d, const protocol::Request &req,
   return r;
 }
 
+// `rollback rescue` — get back to the last known-good configuration
+// NOW. Applies immediately and records a commit, exactly like
+// `rollback previous` and `rollback to <id>`; Junos stages it in the
+// candidate instead, but consistency inside one product beats parity
+// with another, and the verb exists for use under duress.
+auto HandleRollbackRescue(Runtime::Impl &d, const protocol::Request &req)
+    -> protocol::Response {
+  const std::string label = "rollback rescue";
+  const auto path = RescuePath(d);
+  std::error_code ec;
+  if (path.empty() || !std::filesystem::exists(path, ec)) {
+    d.Emit(req, label, false, "no rescue configuration");
+    return ErrorResponse(req, "not_found",
+                         "no rescue configuration has been saved",
+                         "`save rescue` stores the running configuration "
+                         "as the rescue slot");
+  }
+  auto rescue = ReadConfigFile(path);
+  if (!rescue) {
+    d.Emit(req, label, false, rescue.error().message);
+    return ConfigFileErrorResponse(req, rescue.error());
+  }
+  if (auto bad = ValidateConfig(d.backend.Schema(), *rescue)) {
+    d.Emit(req, label, false, "validation");
+    return ErrorResponse(req, "validation",
+                         std::format("rescue config: {}", *bad));
+  }
+  Candidate target;
+  target.values = std::move(*rescue);
+  auto applied = ApplyAndRecord(d, req, target, req.user);
+  if (!applied) {
+    d.Emit(req, label, false, "apply failed");
+    return ErrorResponse(req, "apply_failed", applied.error().message);
+  }
+  d.Emit(req, label, true, std::format("restored rescue as commit {}",
+                                       *applied));
+  protocol::Response r;
+  r.id = req.id;
+  r.data = EncodeString(std::format("commit_id={}", *applied));
+  return r;
+}
+
 auto HandleShowConfigs(Runtime::Impl &d, const protocol::Request &req)
     -> protocol::Response {
   protocol::Response r;
@@ -823,12 +918,80 @@ auto HandleShowConfigs(Runtime::Impl &d, const protocol::Request &req)
     body += std::format("saved={}\n", name);
   }
   if (names.empty()) body += "saved=<none>\n";
+  // The rescue slot is listed separately because it is not in the
+  // configs directory and is not one of the names above.
+  std::error_code rescue_ec;
+  const auto rescue = RescuePath(d);
+  body += std::format(
+      "rescue={}\n",
+      !rescue.empty() && std::filesystem::exists(rescue, rescue_ec)
+          ? "saved"
+          : "<none>");
   std::error_code ec;
   const bool have_factory =
       !d.factory_config.empty() &&
       std::filesystem::exists(d.factory_config, ec);
   body += std::format("factory={}\n",
                       have_factory ? d.factory_config : "<none>");
+  r.data = EncodeString(body);
+  return r;
+}
+
+// `show system boot` — what the last boot-restore did.
+//
+// The load-bearing line is `ran_this_boot`. A boot where the unit never
+// started leaves the previous boot's report in place, which would read
+// as a perfectly healthy boot; comparing the recorded kernel boot id
+// against the live one is what turns that silent case into a visible
+// one. It is not hypothetical: a systemd ordering cycle deleted the
+// boot job on 2 of 50 power cuts in Phase 0 testing.
+auto HandleShowSystemBoot(Runtime::Impl &d, const protocol::Request &req)
+    -> protocol::Response {
+  protocol::Response r;
+  r.id = req.id;
+
+  std::optional<BootReport> rep = d.last_boot_report;
+  if (!d.state_dir.empty()) {
+    if (auto loaded = LoadBootReport(d.state_dir);
+        loaded && loaded->has_value()) {
+      rep = **loaded;
+    } else if (!loaded) {
+      return ErrorResponse(req, "boot_report", loaded.error().message);
+    }
+  }
+  if (!rep) {
+    r.data = EncodeString(
+        "status=no boot report — boot-restore has never run here\n");
+    return r;
+  }
+
+  const auto live = CurrentBootId();
+  const bool this_boot = IsFromCurrentBoot(*rep, live);
+  std::string body;
+  body += std::format("ran_this_boot={}\n", this_boot ? "yes" : "no");
+  if (!this_boot) {
+    // Kept short: the renderer sizes the field column against the
+    // widest value, so a long line here squeezes every field name into
+    // an unreadable stub.
+    body += "warning=values below are from an EARLIER boot\n";
+    body += "hint=journalctl -b -u einheit-s5-boot\n";
+    body += "hint2=look for a job deleted to break an ordering cycle\n";
+  }
+  body += std::format("outcome={}\n", rep->ok ? "ok" : "FAILED");
+  body += std::format("at={}\n", rep->timestamp.empty() ? "<unknown>"
+                                                        : rep->timestamp);
+  body += std::format("applied_revision={}\n", rep->applied_revision);
+  body += std::format("paths={}\n", rep->paths);
+  if (rep->seeded_factory) body += "seeded_factory=yes\n";
+  if (rep->reverted_pending) body += "reverted_unconfirmed_commit=yes\n";
+  body += std::format("reconcile_added={}\n", rep->reconcile_added);
+  body += std::format("config_divergence={}\n", rep->reconcile_conflicts);
+  body += std::format("duration_ms={}\n", rep->duration_ms);
+  for (const auto &s : rep->steps) {
+    body += std::format("step.{}={} ({}ms){}{}\n", s.name,
+                        s.ok ? "ok" : "FAILED", s.duration_ms,
+                        s.detail.empty() ? "" : " — ", s.detail);
+  }
   r.data = EncodeString(body);
   return r;
 }
@@ -1008,13 +1171,50 @@ Runtime::~Runtime() {
   }
 }
 
-auto Runtime::ApplyRunningAtBoot()
+auto Runtime::ApplyRunningAtBoot(std::vector<BootStep> prior_steps)
     -> std::expected<BootApplyResult, Error<ApplyError>> {
   std::lock_guard<std::mutex> lk(impl_->mu);
   auto &d = *impl_;
   protocol::Request note;
   note.command = "apply_boot";
   note.user = "confd";
+
+  const auto t0 = std::chrono::steady_clock::now();
+  const auto elapsed_ms = [&t0]() -> std::int64_t {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now() - t0)
+        .count();
+  };
+
+  BootReport rep;
+  rep.boot_id = CurrentBootId();
+  rep.timestamp = audit::NowTimestamp();
+  rep.steps = std::move(prior_steps);
+  for (const auto &s : rep.steps) {
+    // A product subsystem that failed makes the boot not-ok even if the
+    // configuration apply below then succeeds — a switch whose fabric
+    // did not come up has not had a good boot.
+    if (!s.ok) rep.ok = false;
+  }
+
+  // EVERY exit from here writes the report. "The apply failed" and
+  // "there was nothing to apply" are outcomes an operator has to be
+  // able to see afterwards just as much as a success is.
+  const auto finish = [&](bool ok, std::string detail) -> void {
+    BootStep step;
+    step.name = "config-apply";
+    step.ok = ok;
+    step.detail = std::move(detail);
+    step.duration_ms = elapsed_ms();
+    rep.steps.push_back(std::move(step));
+    if (!ok) rep.ok = false;
+    rep.duration_ms = elapsed_ms();
+    d.last_boot_report = rep;
+    if (d.state_dir.empty()) return;
+    if (auto w = SaveBootReport(d.state_dir, rep); !w) {
+      d.Emit(note, "boot-report", false, w.error().message);
+    }
+  };
 
   BootApplyResult out;
   if (d.pending.armed) {
@@ -1023,6 +1223,7 @@ auto Runtime::ApplyRunningAtBoot()
     // targets the last *confirmed* intent.
     AutoRevert(d);
     out.reverted_pending = true;
+    rep.reverted_pending = true;
     d.cv.notify_all();
   }
   if (d.history.empty()) {
@@ -1037,11 +1238,14 @@ auto Runtime::ApplyRunningAtBoot()
     if (d.factory_config.empty() ||
         !std::filesystem::exists(d.factory_config, ec)) {
       d.Emit(note, "apply-boot", true, "no committed configuration");
+      finish(true, "no committed configuration to restore");
       return out;
     }
     auto factory = ReadConfigFile(d.factory_config);
     if (!factory) {
       d.Emit(note, "apply-boot", false, factory.error().message);
+      finish(false, std::format("factory config {}: {}", d.factory_config,
+                                factory.error().message));
       return std::unexpected(Error<ApplyError>{
           ApplyError::ValidationFailed,
           std::format("factory config {}: {}", d.factory_config,
@@ -1049,6 +1253,8 @@ auto Runtime::ApplyRunningAtBoot()
     }
     if (auto bad = ValidateConfig(d.backend.Schema(), *factory)) {
       d.Emit(note, "apply-boot", false, *bad);
+      finish(false,
+             std::format("factory config {}: {}", d.factory_config, *bad));
       return std::unexpected(Error<ApplyError>{
           ApplyError::ValidationFailed,
           std::format("factory config {}: {}", d.factory_config, *bad)});
@@ -1058,17 +1264,25 @@ auto Runtime::ApplyRunningAtBoot()
     auto applied = ApplyAndRecord(d, note, seed, "confd-factory");
     if (!applied) {
       d.Emit(note, "apply-boot", false, applied.error().message);
+      finish(false, applied.error().message);
       return std::unexpected(applied.error());
     }
     out.applied = true;
     out.seeded_factory = true;
     out.paths = seed.values.size();
     out.commit = *applied;
-    ReconcileAfterApply(d, seed.values);
+    const auto counts = ReconcileAfterApply(d, seed.values);
     d.Persist(note);
+    rep.applied_revision = *applied;
+    rep.paths = out.paths;
+    rep.seeded_factory = true;
+    rep.reconcile_added = counts.added;
+    rep.reconcile_conflicts = counts.conflicts;
     d.Emit(note, "apply-boot", true,
            std::format("seeded factory defaults as commit {} ({} paths)",
                        *applied, out.paths));
+    finish(true, std::format("seeded factory defaults as commit {}",
+                             *applied));
     return out;
   }
 
@@ -1079,16 +1293,42 @@ auto Runtime::ApplyRunningAtBoot()
   auto applied = d.backend.Apply(target);
   if (!applied) {
     d.Emit(note, "apply-boot", false, applied.error().message);
+    finish(false, applied.error().message);
     return std::unexpected(applied.error());
   }
   out.applied = true;
   out.paths = target.values.size();
   out.commit = commit;
-  ReconcileAfterApply(d, target.values);
+  const auto counts = ReconcileAfterApply(d, target.values);
   d.Persist(note);
+  rep.applied_revision = commit;
+  rep.paths = out.paths;
+  rep.reconcile_added = counts.added;
+  rep.reconcile_conflicts = counts.conflicts;
   d.Emit(note, "apply-boot", true,
          std::format("restored commit {} ({} paths)", commit, out.paths));
+  if (counts.conflicts > 0) {
+    // Out-of-band change: the box did not come back holding what was
+    // committed. Audited separately from the apply so it is greppable.
+    d.Emit(note, "config-divergence", false,
+           std::format("{} path(s) diverged from commit {} at boot",
+                       counts.conflicts, commit));
+  }
+  finish(true, std::format("restored commit {}", commit));
   return out;
+}
+
+auto Runtime::LastBootReport() const -> std::optional<BootReport> {
+  std::lock_guard<std::mutex> lk(impl_->mu);
+  // Prefer the persisted copy: the process serving `show system boot`
+  // is an interactive CLI that never ran a boot apply itself, so its
+  // in-memory copy is empty by construction.
+  if (!impl_->state_dir.empty()) {
+    if (auto r = LoadBootReport(impl_->state_dir); r && r->has_value()) {
+      return **r;
+    }
+  }
+  return impl_->last_boot_report;
 }
 
 auto Runtime::EditLockState() const -> std::optional<EditLock> {
@@ -1119,6 +1359,9 @@ auto Runtime::HandleRequest(const protocol::Request &req)
         req.args.empty() ? std::string("candidate") : req.args[0];
     return HandleRollback(d, req, mode);
   }
+  if (req.command == "rollback_rescue") {
+    return HandleRollbackRescue(d, req);
+  }
   if (req.command == "rollback_previous") {
     return HandleRollback(d, req, "previous");
   }
@@ -1131,6 +1374,9 @@ auto Runtime::HandleRequest(const protocol::Request &req)
   if (req.command == "load_replace") return HandleLoad(d, req, "replace");
   if (req.command == "load_factory") return HandleLoad(d, req, "factory");
   if (req.command == "show_configs") return HandleShowConfigs(d, req);
+  if (req.command == "show_system_boot") {
+    return HandleShowSystemBoot(d, req);
+  }
   if (req.command == "show_config") return HandleShowConfig(d, req);
   if (req.command == "show_diff") return HandleShowDiff(d, req);
   if (req.command == "show_commits") return HandleShowCommits(d, req);

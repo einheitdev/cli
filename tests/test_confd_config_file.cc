@@ -414,6 +414,124 @@ TEST(ConfdConfigFile, ShowConfigsListsSavedFilesAndTheFactoryFile) {
   EXPECT_EQ(listed.find("saved=<none>"), std::string::npos);
 }
 
+// ── WP0.5 rescue configuration ──────────────────────────────────
+
+TEST(ConfdRescue, SaveRescueAndRollbackRescueRoundTrip) {
+  Fixture f("rescue_roundtrip");
+  f.Start();
+  auto s = f.Configure();
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("set", {"name", "known-good"}, s))));
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("set", {"port", "22"}, s))));
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("commit", {}, s))));
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("save", {"rescue"}))));
+
+  // Now wreck the box the way an operator would: a hostile config that
+  // commits cleanly and leaves the switch unusable.
+  auto s2 = f.Configure();
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("set", {"name", "hostile"}, s2))));
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("delete", {"port"}, s2))));
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("commit", {}, s2))));
+  EXPECT_EQ(f.backend.DeviceState().at("name"), "hostile");
+
+  // One verb, no session, applies immediately — this is the verb you
+  // reach for when the box is broken.
+  auto rolled = f.rt->HandleRequest(Req("rollback_rescue"));
+  ASSERT_TRUE(Ok(rolled)) << (rolled.error ? rolled.error->message : "");
+  EXPECT_NE(Body(rolled).find("commit_id="), std::string::npos);
+  EXPECT_EQ(f.backend.DeviceState().at("name"), "known-good");
+  EXPECT_EQ(f.backend.DeviceState().at("port"), "22");
+}
+
+TEST(ConfdRescue, RescueLivesOutsideTheConfigsDirectory) {
+  // So a factory reset that clears saved configurations cannot take the
+  // rescue config with it — surviving a reset is its whole purpose.
+  Fixture f("rescue_location");
+  f.Start();
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("save", {"rescue"}))));
+  EXPECT_TRUE(fs::exists(f.dir.path / "rescue.conf"));
+  EXPECT_FALSE(fs::exists(f.dir.path / "configs" / "rescue.conf"));
+  // And it is not listed among the ordinary saved configs.
+  const auto listed = Body(f.rt->HandleRequest(Req("show_configs")));
+  EXPECT_NE(listed.find("rescue=saved"), std::string::npos) << listed;
+  EXPECT_EQ(listed.find("saved=rescue"), std::string::npos) << listed;
+}
+
+TEST(ConfdRescue, RescueSurvivesAFactoryReset) {
+  Fixture f("rescue_survives_factory");
+  const auto factory = f.WriteFactory({{"name", "factory-default"}});
+  f.Start(factory);
+  auto s = f.Configure();
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("set", {"name", "known-good"}, s))));
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("commit", {}, s))));
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("save", {"rescue"}))));
+
+  auto s2 = f.Configure();
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("load_factory", {}, s2))));
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("commit", {}, s2))));
+  EXPECT_EQ(f.backend.DeviceState().at("name"), "factory-default");
+
+  // The rescue slot is still there, and still gets the box back.
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("rollback_rescue"))));
+  EXPECT_EQ(f.backend.DeviceState().at("name"), "known-good");
+}
+
+TEST(ConfdRescue, RollbackRescueWithNothingSavedIsAClearError) {
+  Fixture f("rescue_missing");
+  f.Start();
+  auto r = f.rt->HandleRequest(Req("rollback_rescue"));
+  ASSERT_FALSE(Ok(r));
+  EXPECT_EQ(r.error->code, "not_found");
+  EXPECT_NE(r.error->hint.find("save rescue"), std::string::npos);
+}
+
+TEST(ConfdRescue, RescueSurvivesARestart) {
+  Fixture f("rescue_restart");
+  f.Start();
+  auto s = f.Configure();
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("set", {"name", "known-good"}, s))));
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("commit", {}, s))));
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("save", {"rescue"}))));
+
+  f.rt.reset();
+  f.backend.ResetDevice();
+  f.Start();
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("rollback_rescue"))));
+  EXPECT_EQ(f.backend.DeviceState().at("name"), "known-good");
+}
+
+TEST(ConfdRescue, LoadReplaceRescueStagesItInsteadOfApplying) {
+  // The reserved name works through the ordinary load verb too, for an
+  // operator who would rather review the rescue config before it lands.
+  Fixture f("rescue_stage");
+  f.Start();
+  auto s = f.Configure();
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("set", {"name", "known-good"}, s))));
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("commit", {}, s))));
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("save", {"rescue"}))));
+  auto s2 = f.Configure();
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("set", {"name", "hostile"}, s2))));
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("commit", {}, s2))));
+
+  auto s3 = f.Configure();
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("load_replace", {"rescue"}, s3))));
+  EXPECT_EQ(f.backend.DeviceState().at("name"), "hostile");  // staged only
+  ASSERT_TRUE(Ok(f.rt->HandleRequest(Req("commit", {}, s3))));
+  EXPECT_EQ(f.backend.DeviceState().at("name"), "known-good");
+}
+
+TEST(ConfdRescue, ACorruptRescueConfigIsRefusedNotApplied) {
+  Fixture f("rescue_invalid");
+  f.Start();
+  // port 999 is out of the schema's range.
+  ASSERT_TRUE(WriteConfigFile((f.dir.path / "rescue.conf").string(),
+                              {{"port", "999"}})
+                  .has_value());
+  auto r = f.rt->HandleRequest(Req("rollback_rescue"));
+  ASSERT_FALSE(Ok(r));
+  EXPECT_EQ(r.error->code, "validation");
+  EXPECT_EQ(f.backend.ApplyCount(), 0);
+}
+
 TEST(ConfdConfigFile, SaveIsUnavailableWithoutAStateDirectory) {
   MemoryBackend backend(TestSchema());
   Runtime rt(backend, {});
