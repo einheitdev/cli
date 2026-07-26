@@ -19,6 +19,7 @@
 #include <expected>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "einheit/cli/error.h"
 #include "einheit/cli/schema.h"
@@ -83,6 +84,28 @@ class ConfigBackend {
   /// backend's lifetime (the framework relies on no maybe-null deref).
   /// @returns The loaded schema.
   virtual auto Schema() const -> const schema::Schema & = 0;
+
+  /// Things the operator should know BEFORE this candidate is applied,
+  /// which are not reasons to refuse it.
+  ///
+  /// The motivating case is anti-lockout: a commit that changes the
+  /// address, VLAN or route the operator's own session is riding on is
+  /// perfectly legitimate, and is also how a remote operator loses the
+  /// box. Refusing it would be wrong — sometimes readdressing the
+  /// management interface is exactly the job. Applying it silently is
+  /// how the job ends with a site visit. So the product says what it
+  /// is about to do and suggests `commit confirmed`, and the operator
+  /// decides.
+  ///
+  /// Called on `show diff` and on commit, before Apply. May read the
+  /// box; must not change it, and must not throw.
+  /// @param candidate The configuration about to be applied.
+  /// @returns One line per warning; empty when there is nothing to say.
+  virtual auto Warnings(const Candidate &candidate) const
+      -> std::vector<std::string> {
+    (void)candidate;
+    return {};
+  }
 };
 
 }  // namespace einheit::cli::confd

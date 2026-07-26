@@ -137,6 +137,29 @@ auto DiffConfigs(const Config &want, const Config &got)
   return {};
 }
 
+/// A backend that has something to say about most candidates.
+///
+/// Warnings are the newest thing the runtime calls into on the commit
+/// and diff paths, and the whole point of them is that they are
+/// advisory: a warning must never change what a commit does. Fuzzing
+/// against a backend that warns constantly is how "advisory" gets
+/// proved rather than assumed — the reference model below knows
+/// nothing about warnings, so any effect on running config or history
+/// shows up as a divergence.
+class NoisyBackend : public MemoryBackend {
+ public:
+  using MemoryBackend::MemoryBackend;
+
+  auto Warnings(const Candidate &candidate) const
+      -> std::vector<std::string> override {
+    std::vector<std::string> out;
+    for (const auto &[key, value] : candidate.values) {
+      out.push_back(std::format("{} is set to {}", key, value));
+    }
+    return out;
+  }
+};
+
 auto RunSeed(std::uint32_t seed) -> void {
   const auto state_dir =
       fs::temp_directory_path() /
@@ -145,7 +168,7 @@ auto RunSeed(std::uint32_t seed) -> void {
 
   auto schema = schema::LoadSchemaFromString(kSchemaYaml);
   ASSERT_TRUE(schema.has_value());
-  MemoryBackend backend(*schema);
+  NoisyBackend backend(*schema);
   RuntimeOptions opts;
   opts.state_dir = state_dir.string();
   std::optional<Runtime> rt;
