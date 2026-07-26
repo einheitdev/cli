@@ -16,6 +16,7 @@ set(_cli_core_sources
   src/confd/edit_lock.cc
   src/confd/config_file.cc
   src/confd/exerciser.cc
+  src/docs.cc
   src/shell.cc
   src/watch.cc
   src/shell_escape.cc
