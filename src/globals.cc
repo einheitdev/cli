@@ -110,6 +110,12 @@ auto RegisterConfigGlobals(CommandTree &tree)
            "Show uncommitted candidate changes vs running "
            "(Junos: show | compare)"),
       Make("show commits", "show_commits", "List commit history"),
+      // NOTE: `show status` is deliberately NOT here. The confd runtime
+      // serves show_status (commit-confirmed countdown, open session,
+      // edit-lock holder), but products already declare their own
+      // `show status` verb with product-specific help and rendering, so
+      // registering it here would collide with theirs. Each adapter
+      // declares it — see s5's switch_adapter.cc.
       WithArg(Make("show commit", "show_commit",
                    "Show a single commit by id"),
               "id", "Commit id from `show commits`"),
@@ -119,6 +125,13 @@ auto RegisterConfigGlobals(CommandTree &tree)
            "List every configurable path with type + help"),
       Make("configure", "configure",
            "Enter configure mode and open a candidate session",
+           RoleGate::AdminOnly),
+      // Edit-lock escape hatch. Distinct wire verb so `force` survives
+      // path-token stripping, and admin-only because it discards
+      // another operator's candidate.
+      Make("configure force", "configure_force",
+           "Take configure mode from another session, discarding its "
+           "candidate",
            RoleGate::AdminOnly),
       Make("commit", "commit", "Apply the candidate configuration",
            RoleGate::AdminOnly, true),
@@ -161,6 +174,29 @@ auto RegisterConfigGlobals(CommandTree &tree)
                    "path",
                    RoleGate::AdminOnly, true),
               "path", "Dotted schema path"),
+      // Config-file surface: backup, restore, factory reset. `load`
+      // lands in the candidate, never straight on the box, so a
+      // restored file still goes through commit / show diff /
+      // rollback. Each mode is its own wire verb so the mode token
+      // survives path-token stripping.
+      WithArg(Make("save", "save",
+                   "Save the running configuration to a named file",
+                   RoleGate::AdminOnly),
+              "name", "Config name (letters, digits, '.', '-', '_')"),
+      Make("show configs", "show_configs",
+           "List saved configuration files"),
+      WithArg(Make("load merge", "load_merge",
+                   "Merge a saved configuration into the candidate",
+                   RoleGate::AdminOnly, true),
+              "name", "Config name from `show configs`"),
+      WithArg(Make("load replace", "load_replace",
+                   "Replace the candidate with a saved configuration",
+                   RoleGate::AdminOnly, true),
+              "name", "Config name from `show configs`"),
+      Make("load factory", "load_factory",
+           "Load the shipped factory defaults into the candidate "
+           "(commit to complete a factory reset)",
+           RoleGate::AdminOnly, true),
       // Service control wire verbs (`daemon restart`,
       // `daemon stop`) are no longer declared here — the
       // daemon advertises them through its `describe`

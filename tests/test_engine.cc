@@ -43,6 +43,9 @@ auto MakeDaemon(DaemonState &state) -> FakeDaemon {
     if (req.command == "configure") {
       state.active_session = "sess-7";
       r.data.assign(state.active_session->begin(), state.active_session->end());
+    } else if (req.command == "configure_force") {
+      state.active_session = "sess-forced";
+      r.data.assign(state.active_session->begin(), state.active_session->end());
     } else if (req.command == "set") {
       if (!state.active_session || !req.session_id ||
           *req.session_id != *state.active_session) {
@@ -139,6 +142,29 @@ TEST(Engine, ConfigureSetCommitThreadsSession) {
     std::lock_guard<std::mutex> lk(f.state.mu);
     EXPECT_EQ(f.state.commits, 1);
   }
+}
+
+TEST(Engine, ConfigureForceEntersConfigureModeAndThreadsItsSession) {
+  // `configure force` differs from `configure` only in whose lock it
+  // takes. If the engine did not thread its session the same way, the
+  // operator would be in configure mode on the box while the CLI still
+  // thought it was in operational — every following `set` refused.
+  Fixture f;
+  ASSERT_TRUE(f.tx);
+  auto ctx = f.Ctx();
+
+  auto forced = ParseIn(f.tree, {"configure", "force"});
+  auto r1 = Execute(ctx, forced);
+  ASSERT_TRUE(r1.has_value());
+  EXPECT_EQ(r1->wire, WireStatus::Ok);
+  EXPECT_TRUE(f.session.in_configure);
+  EXPECT_EQ(f.session.session_id.value_or(""), "sess-forced");
+
+  auto set = ParseIn(f.tree, {"set", "hostname", "stolen"});
+  auto r2 = Execute(ctx, set);
+  ASSERT_TRUE(r2.has_value());
+  ASSERT_TRUE(r2->response.has_value());
+  EXPECT_EQ(r2->response->status, protocol::ResponseStatus::Ok);
 }
 
 TEST(Engine, SetWithoutConfigureRejectedBeforeWire) {

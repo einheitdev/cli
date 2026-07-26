@@ -36,7 +36,12 @@ auto ExtractSessionId(const std::vector<std::uint8_t> &bytes)
 auto UpdateSession(Session &session, const CommandSpec &spec,
                    const protocol::Response &resp) -> void {
   if (resp.status != protocol::ResponseStatus::Ok) return;
-  if (spec.wire_command == "configure") {
+  // `configure force` opens a session exactly like `configure` — it
+  // only differs in whose lock it takes — so it must thread the new
+  // session id the same way, or the operator lands in configure mode
+  // server-side while the CLI still thinks it is in operational.
+  if (spec.wire_command == "configure" ||
+      spec.wire_command == "configure_force") {
     session.in_configure = true;
     session.session_id = ExtractSessionId(resp.data);
   } else if (spec.wire_command == "commit" ||

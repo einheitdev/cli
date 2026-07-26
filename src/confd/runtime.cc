@@ -5,11 +5,15 @@
 
 #include "einheit/cli/confd/runtime.h"
 
+#include <unistd.h>
+
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <format>
 #include <mutex>
 #include <optional>
@@ -20,11 +24,20 @@
 #include <vector>
 
 #include "einheit/cli/audit.h"
+#include "einheit/cli/confd/config_file.h"
+#include "einheit/cli/confd/edit_lock.h"
 #include "einheit/cli/confd/store.h"
 #include "einheit/cli/schema.h"
 
 namespace einheit::cli::confd {
 namespace {
+
+// Session ids must be unique among every Runtime that can reach one
+// state directory, because the edit lock compares them to decide who
+// holds configure mode. The pid separates processes; this counter is
+// process-wide rather than per-Runtime so that two Runtimes in one
+// process cannot mint the same id and be mistaken for each other.
+std::atomic<std::uint64_t> g_session_counter{0};
 
 // Current wall-clock time as epoch milliseconds (UTC). Confirm
 // deadlines are absolute so they survive a restart.
@@ -61,12 +74,18 @@ auto EncodeString(const std::string &s) -> std::vector<std::uint8_t> {
   return std::vector<std::uint8_t>(s.begin(), s.end());
 }
 
+// The renderer gives `message` one line and truncates the overflow, so
+// anything the operator needs in order to act belongs in `hint`, which
+// gets its own line — not appended to the message where it is exactly
+// the part that gets cut off.
 auto ErrorResponse(const protocol::Request &req, std::string code,
-                   std::string message) -> protocol::Response {
+                   std::string message, std::string hint = "")
+    -> protocol::Response {
   protocol::Response r;
   r.id = req.id;
   r.status = protocol::ResponseStatus::Error;
-  r.error = protocol::ResponseError{std::move(code), std::move(message), ""};
+  r.error = protocol::ResponseError{std::move(code), std::move(message),
+                                    std::move(hint)};
   return r;
 }
 
@@ -91,12 +110,15 @@ struct ActiveSession {
   std::string id;
   Candidate candidate;
   std::string author;
+  std::string acquired_at;
 };
 
 struct Runtime::Impl {
   ConfigBackend &backend;
   audit::Sink audit;
   std::string state_dir;
+  std::string config_dir;
+  std::string factory_config;
 
   mutable std::mutex mu;
   Config running;
@@ -106,7 +128,6 @@ struct Runtime::Impl {
   // (and backend restarts) so ids never collide or repeat.
   CommitId next_rev = 0;
   PendingConfirm pending;
-  std::uint64_t session_counter = 0;
 
   // Auto-revert timer. The thread lives in the daemon process, which
   // outlives any CLI / SSH session — this is what makes commit-confirmed
@@ -151,23 +172,133 @@ struct Runtime::Impl {
 
 namespace {
 
-auto HandleConfigure(Runtime::Impl &d, const protocol::Request &req)
-    -> protocol::Response {
+// Directory the config-file surface reads and writes. Defaults beside
+// the durable state so a product only has to configure state_dir.
+auto ConfigDir(const Runtime::Impl &d) -> std::string {
+  if (!d.config_dir.empty()) return d.config_dir;
+  if (d.state_dir.empty()) return {};
+  return (std::filesystem::path(d.state_dir) / "configs").string();
+}
+
+// Who holds configure mode. The durable lock is authoritative when the
+// runtime has a state dir — it is the only view that sees a session
+// held by another process (products that embed confd in the CLI binary
+// have one Runtime per logged-in operator).
+auto CurrentLock(const Runtime::Impl &d) -> std::optional<EditLock> {
+  if (!d.state_dir.empty()) {
+    auto held = ReadEditLock(d.state_dir);
+    if (held && held->has_value()) return **held;
+    return std::nullopt;
+  }
+  if (!d.active) return std::nullopt;
+  EditLock lock;
+  lock.holder = d.active->author;
+  lock.session_id = d.active->id;
+  lock.pid = ::getpid();
+  lock.acquired_at = d.active->acquired_at;
+  return lock;
+}
+
+// Drop the durable lock our active session holds. A no-op when the
+// lock was force-stolen in the meantime (ReleaseEditLock only removes
+// a lock whose session id matches).
+auto ReleaseLock(Runtime::Impl &d) -> void {
+  if (d.state_dir.empty() || !d.active) return;
+  ReleaseEditLock(d.state_dir, d.active->id);
+}
+
+// True while our session still owns the durable lock. A session that
+// was displaced by `configure force` must not be able to commit:
+// otherwise the operator who was locked out clobbers the work of the
+// one who took the lock.
+auto StillHoldsLock(const Runtime::Impl &d) -> bool {
+  if (d.state_dir.empty() || !d.active) return true;
+  auto held = ReadEditLock(d.state_dir);
+  if (!held || !held->has_value()) return false;
+  return (*held)->session_id == d.active->id;
+}
+
+// Adopt the durable store when another process has committed since we
+// loaded ours. Called when a session opens, which is the moment before
+// a candidate is seeded from running and therefore the last point at
+// which adopting someone else's commits is free of surprises.
+auto RefreshFromStore(Runtime::Impl &d) -> void {
+  if (d.state_dir.empty()) return;
+  auto loaded = LoadState(d.state_dir);
+  if (!loaded || loaded->next_rev <= d.next_rev) return;
+  d.running = std::move(loaded->running);
+  d.history = std::move(loaded->history);
+  d.next_rev = loaded->next_rev;
+  d.pending = loaded->pending;
+  d.cv.notify_all();  // the adopted window may need arming
+}
+
+auto HandleConfigure(Runtime::Impl &d, const protocol::Request &req,
+                     bool force) -> protocol::Response {
+  const std::string label = force ? "configure force" : "configure";
+  RefreshFromStore(d);
+
   protocol::Response r;
   r.id = req.id;
+  std::optional<EditLock> displaced;
   if (d.active) {
-    d.Emit(req, "configure", false, "session busy");
-    return ErrorResponse(req, "session_busy",
-                         std::format("a configure session is already open ({})",
-                                     d.active->author));
+    if (!force) {
+      d.Emit(req, label, false, "session busy");
+      return ErrorResponse(
+          req, "session_busy",
+          std::format("configure mode is held by {} (session {})",
+                      d.active->author, d.active->id),
+          "`configure force` takes it over, discarding their "
+          "candidate");
+    }
+    displaced = CurrentLock(d);
   }
+
   ActiveSession s;
-  s.id = std::format("confd-{}", ++d.session_counter);
-  s.candidate.values = d.running;  // seed from running
+  s.id = std::format("confd-{}-{}", static_cast<long>(::getpid()),
+                     ++g_session_counter);
   s.author = req.user;
+  s.acquired_at = audit::NowTimestamp();
+
+  if (!d.state_dir.empty()) {
+    EditLock want;
+    want.holder = s.author;
+    want.session_id = s.id;
+    want.pid = static_cast<std::int64_t>(::getpid());
+    want.acquired_at = s.acquired_at;
+    auto got = AcquireEditLock(d.state_dir, want, force);
+    if (!got) {
+      const bool held = got.error().code == LockError::Held;
+      d.Emit(req, label, false, held ? "lock held" : "lock error");
+      return ErrorResponse(
+          req, held ? "session_busy" : "lock_error", got.error().message,
+          held ? "`configure force` takes it over, discarding their "
+                 "candidate"
+               : "");
+    }
+    if (got->stolen_from) {
+      displaced = got->stolen_from;
+    } else if (got->reclaimed_from && !displaced) {
+      // A holder whose process died: reclaimed silently, but recorded,
+      // because "the box was wedged in configure mode" is exactly the
+      // kind of thing an operator later needs the audit log to explain.
+      d.Emit(req, label, true,
+             std::format("reclaimed a stale lock from {} (session {})",
+                         got->reclaimed_from->holder,
+                         got->reclaimed_from->session_id));
+    }
+  }
+
+  s.candidate.values = d.running;  // seed from running
   d.active = std::move(s);
   r.data = EncodeString(d.active->id);
-  d.Emit(req, "configure", true, "ok");
+  if (displaced) {
+    d.Emit(req, label, true,
+           std::format("took configure mode from {} (session {})",
+                       displaced->holder, displaced->session_id));
+  } else {
+    d.Emit(req, label, true, "ok");
+  }
   return r;
 }
 
@@ -302,6 +433,25 @@ auto TimerLoop(Runtime::Impl &d) -> void {
   }
 }
 
+// Refusal shared by commit and commit-confirmed: our session lost the
+// edit lock to a `configure force` while we were editing.
+auto LockLostResponse(Runtime::Impl &d, const protocol::Request &req,
+                      const std::string &label) -> protocol::Response {
+  d.Emit(req, label, false, "lock lost");
+  std::string hint =
+      "your candidate is still here; `configure force` takes the lock "
+      "back";
+  if (auto held = CurrentLock(d)) {
+    hint = std::format("{} holds it now (session {}); `configure force` "
+                       "takes it back",
+                       held->holder, held->session_id);
+  }
+  return ErrorResponse(
+      req, "lock_lost",
+      "configure mode was taken over — nothing was committed",
+      std::move(hint));
+}
+
 auto HandleCommit(Runtime::Impl &d, const protocol::Request &req)
     -> protocol::Response {
   if (!d.active) {
@@ -309,6 +459,7 @@ auto HandleCommit(Runtime::Impl &d, const protocol::Request &req)
     return ErrorResponse(req, "no_session",
                          "nothing to commit — run `configure`");
   }
+  if (!StillHoldsLock(d)) return LockLostResponse(d, req, "commit");
   auto applied = ApplyAndRecord(d, req, d.active->candidate, d.active->author);
   if (!applied) {
     // Keep the session so the operator can fix and retry; running
@@ -316,6 +467,7 @@ auto HandleCommit(Runtime::Impl &d, const protocol::Request &req)
     d.Emit(req, "commit", false, "apply failed");
     return ErrorResponse(req, "apply_failed", applied.error().message);
   }
+  ReleaseLock(d);
   d.active.reset();
   // A plain commit while a confirm window is open confirms/supersedes
   // it: the fresh commit is now running, so there is nothing to revert.
@@ -351,11 +503,15 @@ auto HandleCommitConfirmed(Runtime::Impl &d, const protocol::Request &req)
         req, "bad_args",
         "commit confirmed <minutes>: minutes must be positive");
   }
+  if (!StillHoldsLock(d)) {
+    return LockLostResponse(d, req, "commit confirmed");
+  }
   auto applied = ApplyAndRecord(d, req, d.active->candidate, d.active->author);
   if (!applied) {
     d.Emit(req, "commit confirmed", false, "apply failed");
     return ErrorResponse(req, "apply_failed", applied.error().message);
   }
+  ReleaseLock(d);
   d.active.reset();
   // Arm the auto-revert. Revert target is the commit BEFORE the one we
   // just applied (0 => empty config, when this is the first commit).
@@ -414,6 +570,10 @@ auto RollbackTo(Runtime::Impl &d, const protocol::Request &req,
 auto HandleRollback(Runtime::Impl &d, const protocol::Request &req,
                     const std::string &mode) -> protocol::Response {
   if (mode == "candidate") {
+    // Discarding the candidate ends the session, so the edit lock goes
+    // with it — this is the path the shell takes when the operator
+    // leaves configure mode, including on `exit`.
+    ReleaseLock(d);
     d.active.reset();
     d.Emit(req, "rollback candidate", true, "ok");
     protocol::Response r;
@@ -497,6 +657,182 @@ auto HandleShowConfig(Runtime::Impl &d, const protocol::Request &req)
   return r;
 }
 
+// Validate a whole configuration against the product schema. Returns
+// the first problem in sorted-path order, so the error a given file
+// produces is always the same one. An empty schema (a bare product)
+// accepts anything, matching the daemon's pre-schema behaviour.
+auto ValidateConfig(const schema::Schema &s, const Config &config)
+    -> std::optional<std::string> {
+  if (s.root.fields.empty()) return std::nullopt;
+  std::vector<std::string> paths;
+  paths.reserve(config.size());
+  for (const auto &[k, v] : config) paths.push_back(k);
+  std::sort(paths.begin(), paths.end());
+  for (const auto &path : paths) {
+    auto v = schema::ValidatePath(s, path, config.at(path));
+    if (!v) return v.error().message;
+  }
+  return std::nullopt;
+}
+
+// Post-apply reconcile. Intent wins for every path the applied
+// configuration carried — those were just programmed — and the box only
+// fills in the paths it said nothing about. The constructor's merge is
+// the opposite direction, and correct there, because it runs when
+// nobody has re-applied intent yet.
+auto ReconcileAfterApply(Runtime::Impl &d, const Config &intent) -> void {
+  d.running = intent;
+  for (const auto &[path, value] : d.backend.ReadRunning()) {
+    d.running.emplace(path, value);
+  }
+}
+
+// Map a config-file failure onto a wire error code. BadName and a
+// missing config are operator mistakes; the rest are box faults.
+auto ConfigFileErrorResponse(const protocol::Request &req,
+                             const Error<ConfigFileError> &err)
+    -> protocol::Response {
+  const char *code = "config_file";
+  switch (err.code) {
+    case ConfigFileError::BadName:
+      code = "bad_args";
+      break;
+    case ConfigFileError::NotFound:
+      code = "not_found";
+      break;
+    case ConfigFileError::NoConfigDir:
+      code = "unavailable";
+      break;
+    case ConfigFileError::ReadFailed:
+    case ConfigFileError::WriteFailed:
+    case ConfigFileError::ParseFailed:
+      break;
+  }
+  return ErrorResponse(req, code, err.message);
+}
+
+// `save <name>` — the running configuration to a named file. Running,
+// not the candidate: a backup should record what the box is actually
+// doing, and an uncommitted candidate is by definition not that.
+auto HandleSave(Runtime::Impl &d, const protocol::Request &req)
+    -> protocol::Response {
+  if (req.args.empty()) {
+    d.Emit(req, "save", false, "bad args");
+    return ErrorResponse(req, "bad_args", "usage: save <name>");
+  }
+  auto path = ConfigFilePath(ConfigDir(d), req.args[0]);
+  if (!path) {
+    d.Emit(req, "save", false, path.error().message);
+    return ConfigFileErrorResponse(req, path.error());
+  }
+  if (auto w = WriteConfigFile(*path, d.running); !w) {
+    d.Emit(req, "save", false, w.error().message);
+    return ConfigFileErrorResponse(req, w.error());
+  }
+  d.Emit(req, "save", true, std::format("wrote {}", *path));
+  protocol::Response r;
+  r.id = req.id;
+  r.data = EncodeString(std::format("saved={} paths={}\n", req.args[0],
+                                    d.running.size()));
+  return r;
+}
+
+// `load merge|replace <name>` / `load factory` — a config file into the
+// candidate. Never straight onto the box: a loaded file goes through
+// the same commit the operator would type by hand, so `show diff`,
+// commit-confirmed and rollback all still apply.
+auto HandleLoad(Runtime::Impl &d, const protocol::Request &req,
+                const std::string &mode) -> protocol::Response {
+  const auto label = std::format("load {}", mode);
+  if (!d.active || req.session_id.value_or("") != d.active->id) {
+    d.Emit(req, label, false, "no session");
+    return ErrorResponse(req, "no_session", "run `configure` first");
+  }
+
+  Config loaded;
+  std::string source;
+  if (mode == "factory") {
+    std::error_code ec;
+    if (!d.factory_config.empty() &&
+        std::filesystem::exists(d.factory_config, ec)) {
+      auto c = ReadConfigFile(d.factory_config);
+      if (!c) {
+        d.Emit(req, label, false, c.error().message);
+        return ConfigFileErrorResponse(req, c.error());
+      }
+      loaded = std::move(*c);
+      source = d.factory_config;
+    } else {
+      // No shipped defaults file: the factory configuration is the
+      // empty one, which on commit resets the box to its own defaults.
+      source = "<none>";
+    }
+  } else {
+    if (req.args.empty()) {
+      d.Emit(req, label, false, "bad args");
+      return ErrorResponse(req, "bad_args",
+                           std::format("usage: load {} <name>", mode));
+    }
+    auto path = ConfigFilePath(ConfigDir(d), req.args[0]);
+    if (!path) {
+      d.Emit(req, label, false, path.error().message);
+      return ConfigFileErrorResponse(req, path.error());
+    }
+    auto c = ReadConfigFile(*path);
+    if (!c) {
+      d.Emit(req, label, false, c.error().message);
+      return ConfigFileErrorResponse(req, c.error());
+    }
+    loaded = std::move(*c);
+    source = req.args[0];
+  }
+
+  // Validate the whole file before touching the candidate: a file that
+  // is half-loaded and half-rejected is worse than one refused
+  // outright.
+  if (auto bad = ValidateConfig(d.backend.Schema(), loaded)) {
+    d.Emit(req, label, false, "validation");
+    return ErrorResponse(req, "validation",
+                         std::format("{}: {}", source, *bad));
+  }
+
+  if (mode == "merge") {
+    for (const auto &[k, v] : loaded) {
+      d.active->candidate.values[k] = v;
+    }
+  } else {
+    // replace and factory both mean "the candidate is exactly this".
+    d.active->candidate.values = loaded;
+  }
+  d.Emit(req, label, true,
+         std::format("{} ({} paths)", source, loaded.size()));
+  protocol::Response r;
+  r.id = req.id;
+  r.data = EncodeString(std::format("loaded={} mode={} paths={}\n", source,
+                                    mode, loaded.size()));
+  return r;
+}
+
+auto HandleShowConfigs(Runtime::Impl &d, const protocol::Request &req)
+    -> protocol::Response {
+  protocol::Response r;
+  r.id = req.id;
+  std::string body;
+  const auto names = ListConfigFiles(ConfigDir(d));
+  for (const auto &name : names) {
+    body += std::format("saved={}\n", name);
+  }
+  if (names.empty()) body += "saved=<none>\n";
+  std::error_code ec;
+  const bool have_factory =
+      !d.factory_config.empty() &&
+      std::filesystem::exists(d.factory_config, ec);
+  body += std::format("factory={}\n",
+                      have_factory ? d.factory_config : "<none>");
+  r.data = EncodeString(body);
+  return r;
+}
+
 auto HandleShowCommits(Runtime::Impl &d, const protocol::Request &req)
     -> protocol::Response {
   protocol::Response r;
@@ -577,6 +913,21 @@ auto HandleShowStatus(Runtime::Impl &d, const protocol::Request &req)
   } else {
     txt += "confirm_pending=no\n";
   }
+  // Who holds configure mode is state, so it is inspectable — an
+  // operator who was just refused needs to see the holder without
+  // having to read the refusal again.
+  if (auto lock = CurrentLock(d)) {
+    txt += std::format("lock_holder={}\nlock_session={}\nlock_since={}\n",
+                       lock->holder.empty() ? "<unknown>" : lock->holder,
+                       lock->session_id, lock->acquired_at.empty()
+                                             ? "<unknown>"
+                                             : lock->acquired_at);
+    if (lock->pid > 0) {
+      txt += std::format("lock_pid={}\n", lock->pid);
+    }
+  } else {
+    txt += "lock_holder=<none>\n";
+  }
   r.data = EncodeString(txt);
   return r;
 }
@@ -587,6 +938,8 @@ Runtime::Runtime(ConfigBackend &backend, RuntimeOptions opts)
     : impl_(std::make_unique<Impl>(backend)) {
   impl_->audit = std::move(opts.audit);
   impl_->state_dir = std::move(opts.state_dir);
+  impl_->config_dir = std::move(opts.config_dir);
+  impl_->factory_config = std::move(opts.factory_config);
 
   // Recover durable state if a state dir is configured and holds a
   // prior run. Persisted running/history is the authority (it survives
@@ -645,6 +998,102 @@ Runtime::~Runtime() {
   }
   impl_->cv.notify_all();
   if (impl_->timer.joinable()) impl_->timer.join();
+  // The edit lock dies with the session: a runtime going down must not
+  // leave configure mode wedged for the next process. A hard crash
+  // skips this, which is what the stale-pid reclaim in AcquireEditLock
+  // is for.
+  {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    ReleaseLock(*impl_);
+  }
+}
+
+auto Runtime::ApplyRunningAtBoot()
+    -> std::expected<BootApplyResult, Error<ApplyError>> {
+  std::lock_guard<std::mutex> lk(impl_->mu);
+  auto &d = *impl_;
+  protocol::Request note;
+  note.command = "apply_boot";
+  note.user = "confd";
+
+  BootApplyResult out;
+  if (d.pending.armed) {
+    // Boot is the confirm deadline. AutoRevert applies the pre-confirm
+    // configuration, records it and disarms, so the restore below
+    // targets the last *confirmed* intent.
+    AutoRevert(d);
+    out.reverted_pending = true;
+    d.cv.notify_all();
+  }
+  if (d.history.empty()) {
+    // Nothing committed yet — a box out of the factory. Seed the
+    // shipped defaults as the first commit, because an unconfigured
+    // switch is not a neutral state: on Linux every switch port comes
+    // up administratively DOWN, so "no configuration" ships a box that
+    // forwards nothing. This is the same file `load factory` stages,
+    // and recording it as a commit gives `show config`, `show commits`
+    // and rollback a real floor to stand on.
+    std::error_code ec;
+    if (d.factory_config.empty() ||
+        !std::filesystem::exists(d.factory_config, ec)) {
+      d.Emit(note, "apply-boot", true, "no committed configuration");
+      return out;
+    }
+    auto factory = ReadConfigFile(d.factory_config);
+    if (!factory) {
+      d.Emit(note, "apply-boot", false, factory.error().message);
+      return std::unexpected(Error<ApplyError>{
+          ApplyError::ValidationFailed,
+          std::format("factory config {}: {}", d.factory_config,
+                      factory.error().message)});
+    }
+    if (auto bad = ValidateConfig(d.backend.Schema(), *factory)) {
+      d.Emit(note, "apply-boot", false, *bad);
+      return std::unexpected(Error<ApplyError>{
+          ApplyError::ValidationFailed,
+          std::format("factory config {}: {}", d.factory_config, *bad)});
+    }
+    Candidate seed;
+    seed.values = std::move(*factory);
+    auto applied = ApplyAndRecord(d, note, seed, "confd-factory");
+    if (!applied) {
+      d.Emit(note, "apply-boot", false, applied.error().message);
+      return std::unexpected(applied.error());
+    }
+    out.applied = true;
+    out.seeded_factory = true;
+    out.paths = seed.values.size();
+    out.commit = *applied;
+    ReconcileAfterApply(d, seed.values);
+    d.Persist(note);
+    d.Emit(note, "apply-boot", true,
+           std::format("seeded factory defaults as commit {} ({} paths)",
+                       *applied, out.paths));
+    return out;
+  }
+
+  // A copy, not a reference into d.history: Apply is free to take a
+  // while, and ApplyAndRecord elsewhere may reallocate the vector.
+  const Candidate target = d.history.back().candidate;
+  const CommitId commit = d.history.back().id;
+  auto applied = d.backend.Apply(target);
+  if (!applied) {
+    d.Emit(note, "apply-boot", false, applied.error().message);
+    return std::unexpected(applied.error());
+  }
+  out.applied = true;
+  out.paths = target.values.size();
+  out.commit = commit;
+  ReconcileAfterApply(d, target.values);
+  d.Persist(note);
+  d.Emit(note, "apply-boot", true,
+         std::format("restored commit {} ({} paths)", commit, out.paths));
+  return out;
+}
+
+auto Runtime::EditLockState() const -> std::optional<EditLock> {
+  std::lock_guard<std::mutex> lk(impl_->mu);
+  return CurrentLock(*impl_);
 }
 
 auto Runtime::HandleRequest(const protocol::Request &req)
@@ -652,7 +1101,12 @@ auto Runtime::HandleRequest(const protocol::Request &req)
   std::lock_guard<std::mutex> lk(impl_->mu);
   auto &d = *impl_;
 
-  if (req.command == "configure") return HandleConfigure(d, req);
+  if (req.command == "configure") {
+    return HandleConfigure(d, req, /*force=*/false);
+  }
+  if (req.command == "configure_force") {
+    return HandleConfigure(d, req, /*force=*/true);
+  }
   if (req.command == "set") return HandleSet(d, req);
   if (req.command == "delete") return HandleDelete(d, req);
   if (req.command == "commit") return HandleCommit(d, req);
@@ -672,6 +1126,11 @@ auto Runtime::HandleRequest(const protocol::Request &req)
     return HandleRollback(d, req,
                           req.args.empty() ? std::string() : req.args[0]);
   }
+  if (req.command == "save") return HandleSave(d, req);
+  if (req.command == "load_merge") return HandleLoad(d, req, "merge");
+  if (req.command == "load_replace") return HandleLoad(d, req, "replace");
+  if (req.command == "load_factory") return HandleLoad(d, req, "factory");
+  if (req.command == "show_configs") return HandleShowConfigs(d, req);
   if (req.command == "show_config") return HandleShowConfig(d, req);
   if (req.command == "show_diff") return HandleShowDiff(d, req);
   if (req.command == "show_commits") return HandleShowCommits(d, req);
